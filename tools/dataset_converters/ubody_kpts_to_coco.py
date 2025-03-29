@@ -123,7 +123,7 @@ def split_dataset(annotation_path: str, split_path: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-root', type=str, default='data/UBody')
+    parser.add_argument('--data-root', type=str, default='/media/haziq/Haziq/openmmlab/UBody/')
     args = parser.parse_args()
     video_root = f'{args.data_root}/videos'
     split_path = f'{args.data_root}/splits/intra_scene_test_list.npy'

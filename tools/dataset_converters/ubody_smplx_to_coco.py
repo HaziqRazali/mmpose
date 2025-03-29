@@ -400,8 +400,8 @@ def process_scene_anno(scene: str, annotation_root: str, splits: np.array,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-root', type=str, default='data/UBody')
-    parser.add_argument('--human-model-path', type=str, default='data/SMPLX')
+    parser.add_argument('--data-root', type=str, default='/media/haziq/Haziq/openmmlab/UBody/')
+    parser.add_argument('--human-model-path', type=str, default='/media/haziq/Haziq/openmmlab/SMPLX/')
     parser.add_argument(
         '--nproc', default=8, type=int, help='number of process')
     args = parser.parse_args()

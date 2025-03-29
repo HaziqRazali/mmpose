@@ -258,12 +258,12 @@ humanart_coco133 = [(i, i) for i in range(17)] + [(17, 99), (18, 120),
                                                   (19, 17), (20, 20)]
 
 data_mode = 'topdown'
-data_root = 'data/'
+data_root = '/media/haziq/Haziq/openmmlab/'
 
 # train datasets
 dataset_coco = dict(
     type='CocoWholeBodyDataset',
-    data_root='data/coco/',
+    data_root='/media/haziq/Haziq/openmmlab/coco/',
     data_mode='topdown',
     ann_file='annotations/coco_wholebody_train_v1.0.json',
     data_prefix=dict(img='train2017/'),
@@ -515,7 +515,7 @@ interhand_coco133 = interhand_right + interhand_left
 
 dataset_interhand2d = dict(
     type='InterHand2DDoubleDataset',
-    data_root='data/interhand2.6m/',
+    data_root='/media/haziq/Haziq/openmmlab/interhand2.6m/',
     data_mode='topdown',
     ann_file='annotations/all/InterHand2.6M_train_data.json',
     camera_param_file='annotations/all/InterHand2.6M_train_camera.json',
@@ -533,7 +533,7 @@ dataset_interhand2d = dict(
 
 dataset_interhand3d = dict(
     type='InterHand3DDataset',
-    data_root='data/interhand2.6m/',
+    data_root='/media/haziq/Haziq/openmmlab/interhand2.6m/',
     data_mode='topdown',
     ann_file='annotations/all/InterHand2.6M_train_data.json',
     camera_param_file='annotations/all/InterHand2.6M_train_camera.json',
@@ -570,7 +570,7 @@ for scene in scenes:
     train_ann = f'annotations/{scene}/train_3dkeypoint_annotation.json'
     ubody = dict(
         type='UBody3dDataset',
-        data_root='data/UBody/',
+        data_root='/media/haziq/Haziq/openmmlab/UBody/',
         ann_file=train_ann,
         data_mode='topdown',
         causal=True,
@@ -586,7 +586,7 @@ h3wb_dataset = dict(
     ann_file='annotation_body3d/h3wb_train_bbox.npz',
     seq_len=1,
     causal=True,
-    data_root='data/h36m/',
+    data_root='/media/haziq/Haziq/openmmlab/h36m/',
     data_prefix=dict(img='images/'),
     test_mode=False,
     pipeline=[])
@@ -595,7 +595,7 @@ train_datasets = [
     dataset_wb,
     dataset_body,
     dataset_face,
-    *ubody_datasets,
+    #*ubody_datasets,
     h3wb_dataset,
 ]
 
@@ -644,7 +644,7 @@ val_dataloader = dict(
         ann_file='annotation_body3d/h3wb_train_bbox.npz',
         seq_len=1,
         causal=True,
-        data_root='data/h36m/',
+        data_root='/media/haziq/Haziq/openmmlab/h36m/',
         data_prefix=dict(img='images/'),
         test_mode=True,
         pipeline=val_pipeline))
@@ -666,12 +666,12 @@ test_evaluator = val_evaluator
 #     sampler=dict(type='DefaultSampler', shuffle=False, round_up=False),
 #     dataset=dict(
 #         type='CocoWholeBodyDataset',
-#         data_root='data/coco/',
+#         data_root='/media/haziq/Haziq/openmmlab/coco/',
 #         data_mode='topdown',
 #         ann_file='annotations/coco_wholebody_val_v1.0.json',
 #         data_prefix=dict(img='val2017/'),
 #         test_mode=True,
-#         bbox_file='data/coco/person_detection_results/'
+#         bbox_file='/media/haziq/Haziq/openmmlab/coco/person_detection_results/'
 #         'COCO_val2017_detections_AP_H_56_person.json',
 #         pipeline=val_pipeline,
 #     ))
@@ -680,7 +680,7 @@ test_evaluator = val_evaluator
 # # evaluators
 # val_evaluator = dict(
 #     type='CocoWholeBodyMetric',
-#     ann_file='data/coco/' + 'annotations/coco_wholebody_val_v1.0.json')
+#     ann_file='/media/haziq/Haziq/openmmlab/coco/' + 'annotations/coco_wholebody_val_v1.0.json')
 # test_evaluator = val_evaluator
 
 # hooks

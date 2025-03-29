@@ -119,7 +119,7 @@ model = dict(
 # base dataset settings
 dataset_type = 'CocoWholeBodyDataset'
 data_mode = 'topdown'
-data_root = 'data/'
+data_root = '/media/haziq/Haziq/openmmlab/' #'data/'
 
 backend_args = dict(backend='local')
 
@@ -255,7 +255,7 @@ dataset_coco = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='coco/annotations/coco_wholebody_train_v1.0.json',
-    data_prefix=dict(img='detection/coco/train2017/'),
+    data_prefix=dict(img='coco/train2017/'),
     pipeline=[],
 )
 
@@ -370,7 +370,7 @@ for scene in ubody_scenes:
         type='UBody2dDataset',
         data_root=data_root,
         data_mode=data_mode,
-        ann_file=f'Ubody/annotations/{scene}/train_annotations.json',
+        ann_file=f'UBody/annotations/{scene}/train_annotations.json',
         data_prefix=dict(img='pose/UBody/images/'),
         pipeline=[],
         sample_interval=10)
@@ -532,10 +532,10 @@ dataset_interhand2d = dict(
     type='InterHand2DDoubleDataset',
     data_root=data_root,
     data_mode=data_mode,
-    ann_file='interhand26m/annotations/all/InterHand2.6M_train_data.json',
-    camera_param_file='interhand26m/annotations/all/'
+    ann_file='interhand2.6m/annotations/all/InterHand2.6M_train_data.json',
+    camera_param_file='interhand2.6m/annotations/all/'
     'InterHand2.6M_train_camera.json',
-    joint_file='interhand26m/annotations/all/'
+    joint_file='interhand2.6m/annotations/all/'
     'InterHand2.6M_train_joint_3d.json',
     data_prefix=dict(img='interhand2.6m/images/train/'),
     sample_interval=10,
@@ -581,10 +581,10 @@ val_dataloader = dict(
     sampler=dict(type='DefaultSampler', shuffle=False, round_up=False),
     dataset=dict(
         type='CocoWholeBodyDataset',
-        ann_file='data/coco/annotations/coco_wholebody_val_v1.0.json',
+        ann_file=data_root+'coco/annotations/coco_wholebody_val_v1.0.json',
         data_prefix=dict(img='data/detection/coco/val2017/'),
         pipeline=val_pipeline,
-        bbox_file='data/coco/person_detection_results/'
+        bbox_file=data_root+'coco/person_detection_results/'
         'COCO_val2017_detections_AP_H_56_person.json',
         test_mode=True))
 
@@ -611,5 +611,5 @@ custom_hooks = [
 # evaluators
 val_evaluator = dict(
     type='CocoWholeBodyMetric',
-    ann_file='data/coco/annotations/coco_wholebody_val_v1.0.json')
+    ann_file=data_root+'coco/annotations/coco_wholebody_val_v1.0.json')
 test_evaluator = val_evaluator
