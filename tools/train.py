@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import os
+import torch
 import os.path as osp
 
 from mmengine.config import Config, DictAction
@@ -138,6 +139,7 @@ def merge_args(cfg, args):
 
 
 def main():
+    torch.multiprocessing.set_sharing_strategy('file_system')
     args = parse_args()
 
     # load config

@@ -8,7 +8,7 @@ input_size = (192, 256)
 max_epochs = 270
 stage2_num_epochs = 10
 base_lr = 5e-4
-train_batch_size = 1024
+train_batch_size = int(1024 / 8)
 val_batch_size = 32
 
 train_cfg = dict(max_epochs=max_epochs, val_interval=10)
@@ -264,8 +264,7 @@ dataset_aic = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='aic/annotations/aic_train.json',
-    data_prefix=dict(img='pose/ai_challenge/ai_challenger_keypoint'
-                     '_train_20170902/keypoint_train_images_20170902/'),
+    data_prefix=dict(img='aic/ai_challenger_keypoint_train_20170902/keypoint_train_images_20170902/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -279,7 +278,7 @@ dataset_crowdpose = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='crowdpose/annotations/mmpose_crowdpose_trainval.json',
-    data_prefix=dict(img='pose/CrowdPose/images/'),
+    data_prefix=dict(img='crowdpose/images/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -293,7 +292,7 @@ dataset_mpii = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='mpii/annotations/mpii_train.json',
-    data_prefix=dict(img='pose/MPI/images/'),
+    data_prefix=dict(img='mpii/images/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -307,7 +306,7 @@ dataset_jhmdb = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='jhmdb/annotations/Sub1_train.json',
-    data_prefix=dict(img='pose/JHMDB/'),
+    data_prefix=dict(img='jhmdb/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -321,7 +320,7 @@ dataset_halpe = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='halpe/annotations/halpe_train_v1.json',
-    data_prefix=dict(img='pose/Halpe/hico_20160224_det/images/train2015'),
+    data_prefix=dict(img='halpe/hico_20160224_det/images/train2015'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -335,7 +334,7 @@ dataset_posetrack = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='posetrack18/annotations/posetrack18_train.json',
-    data_prefix=dict(img='pose/PoseChallenge2018/'),
+    data_prefix=dict(img='posetrack18/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -350,7 +349,7 @@ dataset_humanart = dict(
     data_mode=data_mode,
     ann_file='HumanArt/annotations/training_humanart.json',
     filter_cfg=dict(scenes=['real_human']),
-    data_prefix=dict(img='pose/'),
+    data_prefix=dict(img=''),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -371,7 +370,7 @@ for scene in ubody_scenes:
         data_root=data_root,
         data_mode=data_mode,
         ann_file=f'UBody/annotations/{scene}/train_annotations.json',
-        data_prefix=dict(img='pose/UBody/images/'),
+        data_prefix=dict(img='UBody/images/'),
         pipeline=[],
         sample_interval=10)
     ubody_datasets.append(each)
@@ -409,7 +408,7 @@ dataset_wflw = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='wflw/annotations/face_landmarks_wflw_train.json',
-    data_prefix=dict(img='pose/WFLW/images/'),
+    data_prefix=dict(img='wflw/images/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -424,7 +423,7 @@ dataset_300w = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='300w/annotations/face_landmarks_300w_train.json',
-    data_prefix=dict(img='pose/300w/images/'),
+    data_prefix=dict(img='300w/images/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -442,7 +441,7 @@ dataset_cofw = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='cofw/annotations/cofw_train.json',
-    data_prefix=dict(img='pose/COFW/images/'),
+    data_prefix=dict(img='cofw/images/'),
     pipeline=[
         dict(
             type='KeypointConverter',
@@ -466,7 +465,7 @@ dataset_lapa = dict(
     data_root=data_root,
     data_mode=data_mode,
     ann_file='LaPa/annotations/lapa_trainval.json',
-    data_prefix=dict(img='pose/LaPa/'),
+    data_prefix=dict(img='LaPa/'),
     pipeline=[
         dict(
             type='KeypointConverter',

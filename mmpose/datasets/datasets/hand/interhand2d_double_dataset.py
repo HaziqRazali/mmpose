@@ -136,7 +136,7 @@ class InterHand2DDoubleDataset(BaseCocoStyleDataset):
         _ann_file = ann_file
         if data_root is not None and not is_abs(_ann_file):
             _ann_file = osp.join(data_root, _ann_file)
-        print(f"Annotation file path: {_ann_file}")
+        #print(f"Annotation file path: {_ann_file}")
         assert exists(_ann_file), 'Annotation file does not exist.'
         self.ann_file = _ann_file
 

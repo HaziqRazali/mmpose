@@ -5,8 +5,8 @@ num_keypoints = 133
 input_size = (192, 256)
 
 # runtime
-max_epochs = 270
-stage2_num_epochs = 30
+max_epochs = 271
+stage2_num_epochs = 31
 base_lr = 4e-3
 train_batch_size = 64
 val_batch_size = 32
@@ -105,7 +105,7 @@ model = dict(
 # base dataset settings
 dataset_type = 'CocoWholeBodyDataset'
 data_mode = 'topdown'
-data_root = 'data/coco/'
+data_root = '/media/haziq/Haziq/openmmlab/coco/'
 
 backend_args = dict(backend='local')
 
@@ -202,8 +202,7 @@ val_dataloader = dict(
         ann_file='annotations/coco_wholebody_val_v1.0.json',
         data_prefix=dict(img='val2017/'),
         test_mode=True,
-        bbox_file='data/coco/person_detection_results/'
-        'COCO_val2017_detections_AP_H_56_person.json',
+        bbox_file=data_root + 'person_detection_results/COCO_val2017_detections_AP_H_56_person.json',
         pipeline=val_pipeline,
     ))
 test_dataloader = val_dataloader
