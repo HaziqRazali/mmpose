@@ -5,8 +5,8 @@ num_keypoints = 133
 input_size = (192, 256)
 
 # runtime
-max_epochs = 430
-stage2_num_epochs = 190
+max_epochs = 420
+stage2_num_epochs = 30
 base_lr = 4e-3
 train_batch_size = 64
 val_batch_size = 32
