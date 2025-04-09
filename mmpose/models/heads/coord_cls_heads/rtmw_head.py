@@ -101,8 +101,7 @@ class RTMWHead(BaseHead):
         # Define SimCC layers
         flatten_dims = self.in_featuremap_size[0] * self.in_featuremap_size[1]
 
-        self.coco_nn = nn.Linear(13,13)
-        print(self.coco_nn)
+        #self.coco_nn = nn.Linear(13,13)
 
         ps = 2
         self.ps = nn.PixelShuffle(ps)
