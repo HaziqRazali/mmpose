@@ -37,7 +37,10 @@ done
 CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-270e_coco-wholebody-256x192.py --resume
 
 # wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192
-CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune.py
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
+# gotta understand where the loading happens
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
 
 # body
 CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/body_2d_keypoint/rtmpose-l_8xb256-420e_coco-256x192.py
@@ -48,6 +51,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/body_2d_ke
 CUDA_VISIBLE_DEVICES=0 python tools/test.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-270e_coco-wholebody-256x192.py
 
 # wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192
+# https://github.com/open-mmlab/mmpose/blob/main/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw_cocktail14.md
 CUDA_VISIBLE_DEVICES=0 python tools/test.py \
 configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
 /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
@@ -59,7 +63,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/test.py \
 configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
 /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
 
-# load original model with /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and train for 1 epoch
-# load fine tuned model /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and make sure code prints an error
+# load original model with /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and train for 1 epoch to get the checkpoint
+# load fine tuned model /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and make sure code prints an error (use load from)
 # solve by loading only the relevant components
 # add new branch

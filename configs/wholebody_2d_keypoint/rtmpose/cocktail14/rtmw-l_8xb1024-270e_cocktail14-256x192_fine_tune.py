@@ -115,7 +115,8 @@ model = dict(
 # base dataset settings
 dataset_type = 'CocoDataset'
 data_mode = 'topdown'
-data_root = '/home/haziq/datasets/openmmlab/coco/'
+data_root = '/media/haziq/Haziq/openmmlab/coco/'
+#data_root = '/home/haziq/datasets/openmmlab/coco/'
 
 backend_args = dict(backend='local')
 

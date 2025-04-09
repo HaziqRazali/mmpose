@@ -8,8 +8,10 @@ input_size = (192, 256)
 max_epochs = 270
 stage2_num_epochs = 10
 base_lr = 5e-4
-train_batch_size = int(1024 / 8)
+train_batch_size = 12 #1024
 val_batch_size = 32
+
+load_from = "configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth"
 
 train_cfg = dict(max_epochs=max_epochs, val_interval=10)
 randomness = dict(seed=21)
@@ -581,7 +583,7 @@ val_dataloader = dict(
     dataset=dict(
         type='CocoWholeBodyDataset',
         ann_file=data_root+'coco/annotations/coco_wholebody_val_v1.0.json',
-        data_prefix=dict(img='data/detection/coco/val2017/'),
+        data_prefix=dict(img=data_root+'coco/val2017/'), #data_prefix=dict(img='data/detection/coco/val2017/'),
         pipeline=val_pipeline,
         bbox_file=data_root+'coco/person_detection_results/'
         'COCO_val2017_detections_AP_H_56_person.json',
