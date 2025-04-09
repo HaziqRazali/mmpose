@@ -81,8 +81,7 @@ class RTMWHead(BaseHead):
         super().__init__(init_cfg)
 
         self.in_channels = in_channels
-        self.out_channels_whole_body    = 133
-        self.out_channels_coco          = out_channels
+        self.out_channels = out_channels
         self.input_size = input_size
         self.in_featuremap_size = in_featuremap_size
         self.simcc_split_ratio = simcc_split_ratio
@@ -101,9 +100,6 @@ class RTMWHead(BaseHead):
         # Define SimCC layers
         flatten_dims = self.in_featuremap_size[0] * self.in_featuremap_size[1]
 
-        self.coco_nn = nn.Linear(13,13)
-        print(self.coco_nn)
-
         ps = 2
         self.ps = nn.PixelShuffle(ps)
         self.conv_dec = ConvModule(
@@ -117,7 +113,7 @@ class RTMWHead(BaseHead):
 
         self.final_layer = ConvModule(
             in_channels,
-            self.out_channels_whole_body,
+            out_channels,
             kernel_size=final_layer_kernel_size,
             stride=1,
             padding=final_layer_kernel_size // 2,
@@ -125,7 +121,7 @@ class RTMWHead(BaseHead):
             act_cfg=dict(type='ReLU'))
         self.final_layer2 = ConvModule(
             in_channels // ps + in_channels // 4,
-            self.out_channels_whole_body,
+            out_channels,
             kernel_size=final_layer_kernel_size,
             stride=1,
             padding=final_layer_kernel_size // 2,
@@ -145,7 +141,7 @@ class RTMWHead(BaseHead):
         H = int(self.input_size[1] * self.simcc_split_ratio)
 
         self.gau = RTMCCBlock(
-            self.out_channels_whole_body,
+            self.out_channels,
             gau_cfg['hidden_dims'],
             gau_cfg['hidden_dims'],
             s=gau_cfg['s'],
