@@ -51,3 +51,15 @@ CUDA_VISIBLE_DEVICES=0 python tools/test.py projects/rtmpose/rtmpose/wholebody_2
 CUDA_VISIBLE_DEVICES=0 python tools/test.py \
 configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
 /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
+
+#################### TTD
+
+# run test command to make sure loading works
+CUDA_VISIBLE_DEVICES=0 python tools/test.py \
+configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+/home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
+
+# load original model with /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and train for 1 epoch
+# load fine tuned model /home/haziq/mmpose/configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth and make sure code prints an error
+# solve by loading only the relevant components
+# add new branch
