@@ -171,26 +171,26 @@ class RTMWHead(BaseHead):
         """
         # enc_b  n / 2, h, w
         # enc_t  n,     h, w
-        enc_b, enc_t = feats
+        enc_b, enc_t = feats # [batch, 512, 16, 12] [batch, 1024, 8, 6]
 
-        feats_t = self.final_layer(enc_t)
-        feats_t = torch.flatten(feats_t, 2)
-        feats_t = self.mlp(feats_t)
+        feats_t = self.final_layer(enc_t)   # [num_samples, 133, 8, 6]
+        feats_t = torch.flatten(feats_t, 2) # [num_samples, 133, 48]
+        feats_t = self.mlp(feats_t)         # [num_samples, 133, 128]
 
-        dec_t = self.ps(enc_t)
-        dec_t = self.conv_dec(dec_t)
-        enc_b = torch.cat([dec_t, enc_b], dim=1)
+        dec_t = self.ps(enc_t)                      # [num_samples, 256, 16, 12]
+        dec_t = self.conv_dec(dec_t)                # [num_samples, 256, 16, 12]
+        enc_b = torch.cat([dec_t, enc_b], dim=1)    # [num_samples, 768, 16, 12]
 
-        feats_b = self.final_layer2(enc_b)
-        feats_b = torch.flatten(feats_b, 2)
-        feats_b = self.mlp2(feats_b)
+        feats_b = self.final_layer2(enc_b)          # [num_samples, 133, 16, 12]
+        feats_b = torch.flatten(feats_b, 2)         # [num_samples, 133, 192]
+        feats_b = self.mlp2(feats_b)                # [num_samples, 133, 128]
 
-        feats = torch.cat([feats_t, feats_b], dim=2)
+        feats = torch.cat([feats_t, feats_b], dim=2)    # [num_samples, 133, 256]
 
-        feats = self.gau(feats)
+        feats = self.gau(feats) # [num_samples, 133, 256]
 
-        pred_x = self.cls_x(feats)
-        pred_y = self.cls_y(feats)
+        pred_x = self.cls_x(feats) # [num_samples, num_keypoints, height*2 (384)]
+        pred_y = self.cls_y(feats) # [num_samples, num_keypoints, width*2 (512)]
 
         return pred_x, pred_y
 

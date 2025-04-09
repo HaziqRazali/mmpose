@@ -144,10 +144,12 @@ def main():
 
     # load config
     cfg = Config.fromfile(args.config)
+    # print(cfg["num_keypoints"]) # 133
+    # print(cfg["optim_wrapper"]) # {'type': 'OptimWrapper', 'optimizer': {'type': 'AdamW', 'lr': 0.004, 'weight_decay': 0.05}, 'clip_grad': {'max_norm': 35, 'norm_type': 2}, 'paramwise_cfg': {'norm_decay_mult': 0, 'bias_decay_mult': 0, 'bypass_duplicate': True}}
 
     # merge CLI arguments to config
     cfg = merge_args(cfg, args)
-
+    
     # set preprocess configs to model
     if 'preprocess_cfg' in cfg:
         cfg.model.setdefault('data_preprocessor',

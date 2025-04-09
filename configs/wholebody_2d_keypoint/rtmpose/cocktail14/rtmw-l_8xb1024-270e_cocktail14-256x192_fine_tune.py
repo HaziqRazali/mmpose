@@ -1,14 +1,14 @@
-_base_ = ['mmpose::_base_/default_runtime.py']
+_base_ = ['../../../_base_/default_runtime.py']
 
 # common setting
-num_keypoints = 133
+num_keypoints = 17
 input_size = (192, 256)
 
 # runtime
-max_epochs = 420
-stage2_num_epochs = 30
-base_lr = 4e-3
-train_batch_size = 64
+max_epochs = 270
+stage2_num_epochs = 10
+base_lr = 5e-4
+train_batch_size = 12
 val_batch_size = 32
 
 train_cfg = dict(max_epochs=max_epochs, val_interval=10)
@@ -17,7 +17,7 @@ randomness = dict(seed=21)
 # optimizer
 optim_wrapper = dict(
     type='OptimWrapper',
-    optimizer=dict(type='AdamW', lr=base_lr, weight_decay=0.05),
+    optimizer=dict(type='AdamW', lr=base_lr, weight_decay=0.1),
     clip_grad=dict(max_norm=35, norm_type=2),
     paramwise_cfg=dict(
         norm_decay_mult=0, bias_decay_mult=0, bypass_duplicate=True))
@@ -41,7 +41,7 @@ param_scheduler = [
 ]
 
 # automatically scaling LR based on the actual training batch size
-auto_scale_lr = dict(base_batch_size=512)
+auto_scale_lr = dict(base_batch_size=8192)
 
 # codec settings
 codec = dict(
@@ -61,28 +61,38 @@ model = dict(
         std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True),
     backbone=dict(
-        _scope_='mmdet',
         type='CSPNeXt',
         arch='P5',
         expand_ratio=0.5,
         deepen_factor=1.,
         widen_factor=1.,
-        out_indices=(4, ),
         channel_attention=True,
-        norm_cfg=dict(type='SyncBN'),
+        norm_cfg=dict(type='BN'),
         act_cfg=dict(type='SiLU'),
         init_cfg=dict(
             type='Pretrained',
             prefix='backbone.',
             checkpoint='https://download.openmmlab.com/mmpose/v1/projects/'
-            'rtmposev1/cspnext-l_udp-aic-coco_210e-256x192-273b7631_20230130.pth'  # noqa
+            'rtmposev1/rtmpose-l_simcc-ucoco_dw-ucoco_270e-256x192-4d6dfc62_20230728.pth'  # noqa
         )),
+    neck=dict(
+        type='CSPNeXtPAFPN',
+        in_channels=[256, 512, 1024],
+        out_channels=None,
+        out_indices=(
+            1,
+            2,
+        ),
+        num_csp_blocks=2,
+        expand_ratio=0.5,
+        norm_cfg=dict(type='SyncBN'),
+        act_cfg=dict(type='SiLU', inplace=True)),
     head=dict(
-        type='RTMCCHead',
+        type='RTMWHead',
         in_channels=1024,
         out_channels=num_keypoints,
-        input_size=codec['input_size'],
-        in_featuremap_size=tuple([s // 32 for s in codec['input_size']]),
+        input_size=input_size,
+        in_featuremap_size=tuple([s // 32 for s in input_size]),
         simcc_split_ratio=codec['simcc_split_ratio'],
         final_layer_kernel_size=7,
         gau_cfg=dict(
@@ -100,13 +110,12 @@ model = dict(
             beta=10.,
             label_softmax=True),
         decoder=codec),
-    test_cfg=dict(flip_test=True, ))
+    test_cfg=dict(flip_test=True))
 
 # base dataset settings
-dataset_type = 'CocoWholeBodyDataset'
+dataset_type = 'CocoDataset'
 data_mode = 'topdown'
 data_root = '/home/haziq/datasets/openmmlab/coco/'
-#data_root = '/media/haziq/Haziq/openmmlab/coco/'
 
 backend_args = dict(backend='local')
 
@@ -133,7 +142,7 @@ train_pipeline = [
                 min_holes=1,
                 min_height=0.2,
                 min_width=0.2,
-                p=1.0),
+                p=1.),
         ]),
     dict(type='GenerateTarget', encoder=codec),
     dict(type='PackPoseInputs')
@@ -186,7 +195,7 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_mode=data_mode,
-        ann_file='annotations/coco_wholebody_train_v1.0.json',
+        ann_file='annotations/person_keypoints_train2017.json',
         data_prefix=dict(img='train2017/'),
         pipeline=train_pipeline,
     ))
@@ -200,18 +209,18 @@ val_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_mode=data_mode,
-        ann_file='annotations/coco_wholebody_val_v1.0.json',
+        ann_file='annotations/person_keypoints_val2017.json',
+        # bbox_file=f'{data_root}person_detection_results/'
+        # 'COCO_val2017_detections_AP_H_56_person.json',
         data_prefix=dict(img='val2017/'),
         test_mode=True,
-        bbox_file=data_root + 'person_detection_results/COCO_val2017_detections_AP_H_56_person.json',
         pipeline=val_pipeline,
     ))
 test_dataloader = val_dataloader
 
 # hooks
 default_hooks = dict(
-    checkpoint=dict(
-        save_best='coco-wholebody/AP', rule='greater', max_keep_ckpts=1))
+    checkpoint=dict(save_best='coco/AP', rule='greater', max_keep_ckpts=1))
 
 custom_hooks = [
     dict(
@@ -228,6 +237,6 @@ custom_hooks = [
 
 # evaluators
 val_evaluator = dict(
-    type='CocoWholeBodyMetric',
-    ann_file=data_root + 'annotations/coco_wholebody_val_v1.0.json')
+    type='CocoMetric',
+    ann_file=data_root + 'annotations/person_keypoints_val2017.json')
 test_evaluator = val_evaluator
