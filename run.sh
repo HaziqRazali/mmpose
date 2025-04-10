@@ -47,6 +47,7 @@ done
 
 # wholebody
 CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-270e_coco-wholebody-256x192.py --resume
+CUDA_VISIBLE_DEVICES=1 python tools/train.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-420e_coco-wholebody-256x192.py --resume
 
 # wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py
