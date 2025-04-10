@@ -101,8 +101,6 @@ class RTMWHead(BaseHead):
         # Define SimCC layers
         flatten_dims = self.in_featuremap_size[0] * self.in_featuremap_size[1]
 
-        #self.coco_nn = nn.Linear(13,13)
-
         ps = 2
         self.ps = nn.PixelShuffle(ps)
         self.conv_dec = ConvModule(
@@ -159,6 +157,14 @@ class RTMWHead(BaseHead):
         self.cls_x = nn.Linear(gau_cfg['hidden_dims'], W, bias=False)
         self.cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
 
+        #################### coco mapper
+        self.coco_mapper = nn.Sequential(
+            nn.Linear(self.out_channels_whole_body, self.out_channels_coco),
+            nn.ReLU()
+        )
+        self.coco_cls_x = nn.Linear(gau_cfg['hidden_dims'], W, bias=False)
+        self.coco_cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
+
     def forward(self, feats: Tuple[Tensor]) -> Tuple[Tensor, Tensor]:
         """Forward the network.
 
@@ -190,12 +196,20 @@ class RTMWHead(BaseHead):
 
         feats = torch.cat([feats_t, feats_b], dim=2)    # [num_samples, 133, 256]
 
-        feats = self.gau(feats) # [num_samples, 133, 256]
+        feats = self.gau(feats)     # [num_samples, 133, 256]
 
-        pred_x = self.cls_x(feats) # [num_samples, num_keypoints, height*2 (384)]
-        pred_y = self.cls_y(feats) # [num_samples, num_keypoints, width*2 (512)]
+        pred_x = self.cls_x(feats)  # [num_samples, num_keypoints, h*2 (384)]
+        pred_y = self.cls_y(feats)  # [num_samples, num_keypoints, w*2 (512)]
 
-        return pred_x, pred_y
+        #################### coco mapper
+
+        feats = feats.transpose(1,2)                # [num_samples, 256, 133]
+        coco_feats = self.coco_mapper(feats)        # [num_samples, 256, 17]
+        coco_feats = coco_feats.transpose(1,2)      # [num_samples, 17, 256]
+        coco_pred_x = self.coco_cls_x(coco_feats)   # [num_samples, 17, h*2 (384)]
+        coco_pred_y = self.coco_cls_y(coco_feats)   # [num_samples, 17, w*2 (512)]
+
+        return coco_pred_x, coco_pred_y # pred_x, pred_y
 
     def predict(
         self,

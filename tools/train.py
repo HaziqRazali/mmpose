@@ -20,6 +20,9 @@ def parse_args():
         help='If specify checkpint path, resume from it, while if not '
         'specify, try to auto resume from the latest checkpoint '
         'in the work directory.')
+    parser.add_argument('--trainable_layers', nargs='+', default=None, help='List of trainable layers (e.g., --trainable_layers coco face)')
+    parser.add_argument('--resume_optimizer', type=int, choices=[0,1], default=1)
+    parser.add_argument('--resume_param_scheduler', type=int, choices=[0,1], default=1)
     parser.add_argument(
         '--amp',
         action='store_true',
@@ -113,6 +116,9 @@ def merge_args(cfg, args):
     elif args.resume is not None:
         cfg.resume = True
         cfg.load_from = args.resume
+
+    cfg.resume_optimizer = args.resume_optimizer
+    cfg.resume_param_scheduler = args.resume_param_scheduler
 
     # enable auto scale learning rate
     if args.auto_scale_lr:
