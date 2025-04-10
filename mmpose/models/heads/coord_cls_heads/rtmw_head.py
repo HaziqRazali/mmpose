@@ -158,12 +158,14 @@ class RTMWHead(BaseHead):
         self.cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
 
         #################### coco mapper
+        """
         self.coco_mapper = nn.Sequential(
             nn.Linear(self.out_channels_whole_body, self.out_channels_coco),
             nn.ReLU()
         )
         self.coco_cls_x = nn.Linear(gau_cfg['hidden_dims'], W, bias=False)
         self.coco_cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
+        """
 
     def forward(self, feats: Tuple[Tensor]) -> Tuple[Tensor, Tensor]:
         """Forward the network.
@@ -203,13 +205,17 @@ class RTMWHead(BaseHead):
 
         #################### coco mapper
 
+        """
         feats = feats.transpose(1,2)                # [num_samples, 256, 133]
         coco_feats = self.coco_mapper(feats)        # [num_samples, 256, 17]
         coco_feats = coco_feats.transpose(1,2)      # [num_samples, 17, 256]
         coco_pred_x = self.coco_cls_x(coco_feats)   # [num_samples, 17, h*2 (384)]
         coco_pred_y = self.coco_cls_y(coco_feats)   # [num_samples, 17, w*2 (512)]
-
+        
         return coco_pred_x, coco_pred_y # pred_x, pred_y
+        """
+
+        return pred_x, pred_y
 
     def predict(
         self,
