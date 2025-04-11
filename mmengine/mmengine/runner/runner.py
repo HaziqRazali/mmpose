@@ -1767,7 +1767,7 @@ class Runner:
 
         # make sure checkpoint-related hooks are triggered after `before_run`
         self.load_or_resume()
-
+        
         # Initiate inner count of `optim_wrapper`.
         self.optim_wrapper.initialize_count_status(
             self.model,
