@@ -2093,11 +2093,13 @@ class Runner:
             self.message_hub.load_state_dict(checkpoint['message_hub'])
 
         # resume optimizer
+        print(f"'optimizer' in checkpoint and resume_optimizer: {('optimizer' in checkpoint) and resume_optimizer}")
         if 'optimizer' in checkpoint and resume_optimizer:
             self.optim_wrapper = self.build_optim_wrapper(self.optim_wrapper)
             self.optim_wrapper.load_state_dict(checkpoint['optimizer'])
 
         # resume param scheduler
+        print(f"'param_schedulers' in checkpoint and resume_param_scheduler: {('param_schedulers' in checkpoint) and resume_param_scheduler}")
         if resume_param_scheduler and self.param_schedulers is None:
             self.logger.warning(
                 '`resume_param_scheduler` is True but `self.param_schedulers` '

@@ -6,9 +6,9 @@ input_size = (192, 256)
 
 # runtime
 max_epochs = 270
-stage2_num_epochs = 10
+stage2_num_epochs = 300
 base_lr = 5e-4
-train_batch_size = 12
+train_batch_size = 128
 val_batch_size = 32
 
 train_cfg = dict(max_epochs=max_epochs, val_interval=10)
@@ -117,8 +117,8 @@ model = dict(
 # base dataset settings
 dataset_type = 'CocoDataset'
 data_mode = 'topdown'
-#data_root = '/media/haziq/Haziq/openmmlab/coco/'
-data_root = '/home/haziq/datasets/openmmlab/coco/'
+data_root = '/media/haziq/Haziq/openmmlab/coco/'
+#data_root = '/home/haziq/datasets/openmmlab/coco/'
 
 backend_args = dict(backend='local')
 
