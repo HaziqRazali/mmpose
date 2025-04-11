@@ -109,6 +109,8 @@ model = dict(
             use_target_weight=True,
             beta=10.,
             label_softmax=True),
+        train_new_head = True,
+        head_output_mode = "new",
         decoder=codec),
     test_cfg=dict(flip_test=True))
 

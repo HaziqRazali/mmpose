@@ -11,8 +11,6 @@ base_lr = 5e-4
 train_batch_size = 12 #1024
 val_batch_size = 32
 
-load_from = "configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth"
-
 train_cfg = dict(max_epochs=max_epochs, val_interval=10)
 randomness = dict(seed=21)
 
