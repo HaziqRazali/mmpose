@@ -194,8 +194,7 @@ def main():
     visualizer = VISUALIZERS.build(pose_estimator.cfg.visualizer)
     # the dataset_meta is loaded from the checkpoint and
     # then pass to the model in init_pose_estimator
-    visualizer.set_dataset_meta(
-        pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
+    visualizer.set_dataset_meta(pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
 
     if args.input == 'webcam':
         input_type = 'webcam'
