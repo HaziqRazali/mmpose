@@ -7,7 +7,7 @@ import numpy as np
 if __name__ == "__main__":
     
     result_filename    = "/home/haziq/mmpose/vis_results/results_000000196141.json"
-    image_filename      = "/home/haziq/mmpose/tests/data/coco/000000196141.jpg"
+    image_filename      = "/home/haziq/mmpose/tests/data/mpii/004645041.jpg"
     
     #################### load image
     
@@ -20,8 +20,8 @@ if __name__ == "__main__":
     
     for i,instance in enumerate(result["instance_info"]):
         
-        if i != 1:
-            continue
+        #if i != 1:
+        #    continue
         
         keypoints = np.array(instance["keypoints"])             # [num_keypoints, 2]
         keypoint_scores = np.array(instance["keypoint_scores"]) # [num_keypoints]
