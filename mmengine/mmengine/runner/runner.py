@@ -1777,7 +1777,7 @@ class Runner:
         # Maybe compile the model according to options in self.cfg.compile
         # This must be called **AFTER** model has been wrapped.
         self._maybe_compile('train_step')
-
+    
         # freeze some layers
         if self.trainable_layers is not None:
             for name, param in self.model.named_parameters():

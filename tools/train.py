@@ -117,6 +117,7 @@ def merge_args(cfg, args):
         cfg.resume = True
         cfg.load_from = args.resume
 
+    cfg.trainable_layers = args.trainable_layers
     cfg.resume_optimizer = args.resume_optimizer
     cfg.resume_param_scheduler = args.resume_param_scheduler
 

@@ -66,14 +66,26 @@ for f in /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4; do
     --save-predictions
 done
 
-# wholebody
+
+
+
+
+
+
+
+
+
+
+
+#################### wholebody
 CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-270e_coco-wholebody-256x192.py --resume
 CUDA_VISIBLE_DEVICES=1 python tools/train.py projects/rtmpose/rtmpose/wholebody_2d_keypoint/rtmpose-l_8xb64-420e_coco-wholebody-256x192.py --resume
 
-#################### wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192 and rtmw-l_8xb1024-270e_cocktail14-256x192
+#################### wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192 and rtmw-l_8xb1024-270e_cocktail14-256x192, fine tune on coco
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth --trainable_layers coco --resume_optimizer 0 --resume_param_scheduler 0
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune_coco.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth --trainable_layers coco --resume_optimizer 0 --resume_param_scheduler 0
 
 python demo/topdown_demo_with_mmdet.py \
 demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
@@ -84,10 +96,30 @@ work_dirs/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune/best_coco_AP_epoch_16
 --output-root vis_results/ --save-predictions
 
 #################### wholebody, rtmw-l_8xb1024-270e_cocktail14-256x192 and rtmw-l_8xb1024-270e_cocktail14-256x192, fine tune on mpii
-CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune_mpii.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth --trainable_layers coco --resume_optimizer 0 --resume_param_scheduler 0
+CUDA_VISIBLE_DEVICES=1 python tools/train.py configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192_fine_tune_mpii.py --resume configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth --trainable_layers coco --resume_optimizer 0 --resume_param_scheduler 0
 
 #################### body
 CUDA_VISIBLE_DEVICES=0 python tools/train.py projects/rtmpose/rtmpose/body_2d_keypoint/rtmpose-l_8xb256-420e_coco-256x192.py
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #################### test
 
