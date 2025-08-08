@@ -19,15 +19,32 @@ from mmpose.registry import VISUALIZERS
 from mmpose.structures import merge_data_samples, split_instances
 from mmpose.utils import adapt_mmdet_pipeline
 
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from utils_variables import skeleton, left_right_body_kpt_ids
+
 try:
     from mmdet.apis import inference_detector, init_detector
     has_mmdet = True
 except (ImportError, ModuleNotFoundError):
     has_mmdet = False
 
+try:
+    import pyrealsense2 as rs
+except (ImportError, ModuleNotFoundError):
+    sys.exit()
+
+def deproject(depth_val, x, y, intrin):
+        fx, fy = intrin["fx"], intrin["fy"]
+        ppx, ppy = intrin["ppx"], intrin["ppy"]
+        X = (x - ppx) * depth_val / fx
+        Y = (y - ppy) * depth_val / fy
+        Z = depth_val
+        return [X, Y, Z]
 
 def process_one_image(args,
-                      img,
+                      color_img,
+                      depth_img,
                       detector,
                       pose_estimator,
                       visualizer=None,
@@ -35,26 +52,27 @@ def process_one_image(args,
     """Visualize predicted keypoints (and heatmaps) of one image."""
 
     # predict bbox
-    det_result = inference_detector(detector, img)
+    det_result = inference_detector(detector, color_img)
     pred_instance = det_result.pred_instances.cpu().numpy()
-    bboxes = np.concatenate((pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)                          # concat with score
-    bboxes = bboxes[np.logical_and(pred_instance.labels == args.det_cat_id,pred_instance.scores > args.bbox_thr)]   # keeps bboxes with label that matches a human and with score above a threshold
-    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]                                                                  # non maximum suppression
+    bboxes = np.concatenate((pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
+    bboxes = bboxes[np.logical_and(pred_instance.labels == args.det_cat_id,
+                                   pred_instance.scores > args.bbox_thr)]
+    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
 
     # predict keypoints
-    pose_results = inference_topdown(pose_estimator, img, bboxes)
+    pose_results = inference_topdown(pose_estimator, color_img, bboxes)
     data_samples = merge_data_samples(pose_results)
 
-    # show the results
-    if isinstance(img, str):
-        img = mmcv.imread(img, channel_order='rgb')
-    elif isinstance(img, np.ndarray):
-        img = mmcv.bgr2rgb(img)
+    if isinstance(color_img, str):
+        color_img = mmcv.imread(color_img, channel_order='rgb')
+    elif isinstance(color_img, np.ndarray):
+        color_img = mmcv.bgr2rgb(color_img)
 
     if visualizer is not None:
         visualizer.add_datasample(
             'result',
-            img,
+            color_img,
+            depth_img,
             data_sample=data_samples,
             draw_gt=False,
             draw_heatmap=args.draw_heatmap,
@@ -65,9 +83,139 @@ def process_one_image(args,
             wait_time=show_interval,
             kpt_thr=args.kpt_thr)
 
-    # if there is no instance detected, return None
+    # === Save snapshot every frame ===
+    if 0: #data_samples.get('pred_instances', None) is not None:
+        timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # add ms to avoid collision
+        os.makedirs("snapshots", exist_ok=True)
+
+        # Save RGB image
+        cv2.imwrite(f"snapshots/image_{timestamp}.png", cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR))
+
+        # Save Depth image (raw uint16)
+        if hasattr(depth_img, "get_data"):
+            depth_array = np.asanyarray(depth_img.get_data())  # uint16
+            cv2.imwrite(f"snapshots/depth_{timestamp}.png", depth_array)
+
+            # Save intrinsics
+            try:
+                depth_intrin = depth_img.profile.as_video_stream_profile().get_intrinsics()
+                intrin_dict = {
+                    "width": depth_intrin.width,
+                    "height": depth_intrin.height,
+                    "fx": depth_intrin.fx,
+                    "fy": depth_intrin.fy,
+                    "ppx": depth_intrin.ppx,
+                    "ppy": depth_intrin.ppy,
+                    "model": str(depth_intrin.model),
+                    "coeffs": depth_intrin.coeffs
+                }
+                with open(f"snapshots/intrinsics_{timestamp}.json", "w") as f:
+                    json.dump(intrin_dict, f, indent=2)
+            except Exception as e:
+                print(f"[!] Failed to save intrinsics: {e}")
+        else:
+            print("Warning: depth_img is not a RealSense frame")
+
+        # Save prediction JSON
+        pred_dict = {}
+        pred = data_samples.pred_instances
+
+        for k, v in pred.items():
+            if hasattr(v, "cpu"):
+                pred_dict[k] = v.cpu().numpy().tolist()
+            elif isinstance(v, np.ndarray):
+                pred_dict[k] = v.tolist()
+            else:
+                pred_dict[k] = v  # already JSON-safe
+
+        # Save transformed keypoints if available
+        if hasattr(pred, "transformed_keypoints"):
+            pred_dict["transformed_keypoints"] = pred.transformed_keypoints.cpu().numpy().tolist()
+
+        # Save visualizer skeleton
+        if hasattr(visualizer, "skeleton"):
+            pred_dict["skeleton"] = visualizer.skeleton
+        else:
+            pred_dict["skeleton"] = []
+
+        # Save final JSON
+        with open(f"snapshots/pred_{timestamp}.json", "w") as f:
+            json.dump(pred_dict, f, indent=2)
+
+        print(f"[✔] Frame saved: snapshots/image_{timestamp}.png")
+
+    try:
+        depth_intrin = depth_img.profile.as_video_stream_profile().get_intrinsics()
+        intrin_dict = {
+            "fx": depth_intrin.fx,
+            "fy": depth_intrin.fy,
+            "ppx": depth_intrin.ppx,
+            "ppy": depth_intrin.ppy,
+            "depth_scale": 0.001  # RealSense default
+        }
+    except Exception as e:
+        print(f"[!] Cannot extract intrinsics for 3D viz: {e}")
+        return data_samples.get('pred_instances', None)
+
+    pred = data_samples.pred_instances
+
+    # Convert to numpy (safe for torch.Tensor)
+    keypoints = pred.get('transformed_keypoints', pred.keypoints)
+    if hasattr(keypoints, 'cpu'):
+        keypoints = keypoints.cpu().numpy()  # [N, J, 2]
+    visibility = pred.get('keypoints_visible', None)
+    if visibility is None:
+        visibility = np.ones(keypoints.shape[:2])
+    elif hasattr(visibility, 'cpu'):
+        visibility = visibility.cpu().numpy()
+
+    if keypoints.shape[0] == 0:
+        return pred  # no person detected
+
+    # Plot setup
+    fig = plt.gcf()
+    fig.clf()  # Clear only the current figure (preserve window)
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_title("3D Skeleton")
+
+    for person_kpts, person_vis in zip(keypoints, visibility):
+        joint_xyz = []
+
+        for (x, y), v in zip(person_kpts, person_vis):
+            if v > args.kpt_thr and 0 <= int(x) < depth_img.width and 0 <= int(y) < depth_img.height:
+                depth_val = depth_img.get_distance(int(x), int(y))
+                if depth_val and depth_val > 0:
+                    joint_xyz.append(deproject(depth_val, x, y, intrin_dict))
+                else:
+                    joint_xyz.append([np.nan, np.nan, np.nan])
+            else:
+                joint_xyz.append([np.nan, np.nan, np.nan])
+
+        joint_xyz = np.array(joint_xyz)
+
+        for j, (x, y, z) in enumerate(joint_xyz):
+            if not np.isnan(z) and j in left_right_body_kpt_ids:
+                ax.scatter(x, y, z, c='green', s=10)
+
+        for idx1, idx2 in skeleton:
+            if idx1 < len(joint_xyz) and idx2 < len(joint_xyz):
+                pt1, pt2 = joint_xyz[idx1], joint_xyz[idx2]
+                if not np.any(np.isnan(pt1)) and not np.any(np.isnan(pt2)):
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], [pt1[2], pt2[2]], c='blue', linewidth=2)
+
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    ax.view_init(elev=-80, azim=-90)
+    plt.pause(0.001)  # Refresh the plot without blocking
+
     return data_samples.get('pred_instances', None)
 
+
+def mouse_callback(event, x, y, flags, param):
+    if event == cv2.EVENT_MOUSEMOVE:
+        depth = param.get_distance(x, y)
+        print(f"[mouse_callback] Mouse = ({x}, {y}) → Distance: {depth:.3f} meters")
 
 def main():
     """Visualize the demo images.
@@ -143,7 +291,7 @@ def main():
     parser.add_argument(
         '--thickness',
         type=int,
-        default=1,
+        default=3,
         help='Link thickness for visualization')
     parser.add_argument(
         '--show-interval', type=int, default=0, help='Sleep seconds per frame')
@@ -198,6 +346,8 @@ def main():
 
     if args.input == 'webcam':
         input_type = 'webcam'
+    elif args.input == "realsense":
+        input_type = "realsense"
     else:
         input_type = mimetypes.guess_type(args.input)[0].split('/')[0]
 
@@ -213,10 +363,75 @@ def main():
             img_vis = visualizer.get_image()
             mmcv.imwrite(mmcv.rgb2bgr(img_vis), output_file)
 
+    elif input_type == "realsense":
+
+        # Setup pipeline
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        
+        # Start streaming
+        pipeline_profile = pipeline.start(config)
+
+        # Get depth scale
+        depth_sensor    = pipeline_profile.get_device().first_depth_sensor()
+        depth_scale     = depth_sensor.get_depth_scale()  # in meters per unit
+
+        # Create align object (align depth to color)
+        align = rs.align(rs.stream.color)
+
+        # Mouse callback
+        #mouse_x, mouse_y = -1, -1
+
+        #cv2.namedWindow("RGB | Depth | Overlay")
+        #cv2.setMouseCallback("RGB | Depth | Overlay", mouse_callback)
+
+        try:
+            while True:
+                frames = pipeline.wait_for_frames()
+                aligned_frames = align.process(frames)
+                depth_frame = aligned_frames.get_depth_frame()
+                color_frame = aligned_frames.get_color_frame()
+                if not depth_frame or not color_frame:
+                    continue
+
+                # Convert to numpy arrays
+                color_image = np.asanyarray(color_frame.get_data())
+                depth_image = depth_frame
+
+                # run pose estimator
+                pred_instances  = process_one_image(args, color_image, depth_image, detector, pose_estimator, visualizer, 0.001)
+
+                # convert depth to numpy array
+                # depth_image_raw = np.asanyarray(depth_frame.get_data())  # uint16
+                # depth_colormap = cv2.applyColorMap(
+                #     cv2.convertScaleAbs(depth_image_raw, alpha=0.03),
+                #     cv2.COLORMAP_JET
+                # )
+
+                # # --- Depth overlay on color ---
+                # height, width = depth_image_raw.shape
+                # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width))
+                # depth_data = depth_data.astype(np.float32) * depth_scale  # convert to meters
+                # normalized_depth    = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                # depth_overlay       = cv2.applyColorMap(normalized_depth, cv2.COLORMAP_JET)
+                # blended             = cv2.addWeighted(color_image, 0.5, depth_overlay, 0.5, 0)
+
+                if args.show:
+                    # press ESC to exit
+                    if cv2.waitKey(5) & 0xFF == 27:
+                        break
+                    time.sleep(args.show_interval)
+
+        finally:
+            pipeline.stop()
+
     elif input_type in ['webcam', 'video']:
 
         if args.input == 'webcam':
             cap = cv2.VideoCapture(0)
+                        
         else:
             cap = cv2.VideoCapture(args.input)
 
@@ -232,9 +447,7 @@ def main():
                 break
 
             # topdown pose estimation
-            pred_instances = process_one_image(args, frame, detector,
-                                               pose_estimator, visualizer,
-                                               0.001)
+            pred_instances = process_one_image(args, frame, detector, pose_estimator, visualizer, 0.001)
 
             if args.save_predictions:
                 # save prediction results
