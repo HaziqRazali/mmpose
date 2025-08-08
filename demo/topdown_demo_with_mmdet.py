@@ -34,6 +34,25 @@ try:
 except (ImportError, ModuleNotFoundError):
     sys.exit()
 
+def set_axes_equal(ax):
+    '''Set 3D plot axes to equal scale.'''
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+
+    x_range = abs(x_limits[1] - x_limits[0])
+    x_middle = np.mean(x_limits)
+    y_range = abs(y_limits[1] - y_limits[0])
+    y_middle = np.mean(y_limits)
+    z_range = abs(z_limits[1] - z_limits[0])
+    z_middle = np.mean(z_limits)
+
+    plot_radius = 0.5 * max([x_range, y_range, z_range])
+
+    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+
 def deproject(depth_val, x, y, intrin):
         fx, fy = intrin["fx"], intrin["fy"]
         ppx, ppy = intrin["ppx"], intrin["ppy"]
@@ -84,7 +103,7 @@ def process_one_image(args,
             kpt_thr=args.kpt_thr)
 
     # === Save snapshot every frame ===
-    if 0: #data_samples.get('pred_instances', None) is not None:
+    if 1: #data_samples.get('pred_instances', None) is not None:
         timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # add ms to avoid collision
         os.makedirs("snapshots", exist_ok=True)
 
@@ -202,6 +221,11 @@ def process_one_image(args,
                 pt1, pt2 = joint_xyz[idx1], joint_xyz[idx2]
                 if not np.any(np.isnan(pt1)) and not np.any(np.isnan(pt2)):
                     ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], [pt1[2], pt2[2]], c='blue', linewidth=2)
+                    
+    ax.set_xlim(-1.0, 1.0)
+    ax.set_ylim(-1.0, 1.0)
+    ax.set_zlim(0.0, 3.0)
+    set_axes_equal(ax)
 
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
@@ -210,7 +234,6 @@ def process_one_image(args,
     plt.pause(0.001)  # Refresh the plot without blocking
 
     return data_samples.get('pred_instances', None)
-
 
 def mouse_callback(event, x, y, flags, param):
     if event == cv2.EVENT_MOUSEMOVE:
