@@ -16,24 +16,6 @@ from mmpose.structures import PoseDataSample
 from .opencv_backend_visualizer import OpencvBackendVisualizer
 from .simcc_vis import SimCCVisualizer
 
-def _plot_3d_skeleton(self, keypoints3d):
-    import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D
-
-    if not hasattr(self, '_fig') or self._fig is None:
-        self._fig = plt.figure(figsize=(5, 5))
-        self._ax = self._fig.add_subplot(111, projection='3d')
-    else:
-        self._ax.cla()
-
-    self._ax.scatter(keypoints3d[:, 0], keypoints3d[:, 1], keypoints3d[:, 2], c='r', s=30)
-    self._ax.set_xlim(-0.5, 0.5)
-    self._ax.set_ylim(-0.5, 0.5)
-    self._ax.set_zlim(-0.5, 0.5)
-    self._ax.set_title("Fake 3D Skeleton")
-    plt.draw()
-    plt.pause(0.001)
-
 def _get_adaptive_scales(areas: np.ndarray,
                          min_area: int = 800,
                          max_area: int = 30000) -> np.ndarray:
@@ -263,6 +245,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                              instances: InstanceData,
                              kpt_thr: float = 0.3,
                              show_kpt_idx: bool = False,
+                             show_kpt_subset: Optional[List[int]] = None,
                              skeleton_style: str = 'mmpose'):
         """Draw keypoints and skeletons (optional) of GT or prediction.
 
@@ -280,54 +263,6 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
         Returns:
             np.ndarray: the drawn image which channel is RGB.
         """
-
-        right_body_kpt_ids = [
-            2, 4, 6, 8, 10, 12, 14, 16, 20, 21, 22,
-            112, 113, 114, 115, 116,
-            117, 118, 119, 120,
-            121, 122, 123, 124,
-            125, 126, 127, 128,
-            129, 130, 131, 132
-        ]
-        right_lower_body_kpt_ids = [
-            12, 14, 16, 20, 21, 22  # right_hip, right_knee, right_ankle, right_big_toe, right_small_toe, right_heel
-        ]
-
-        left_body_kpt_ids = [
-            1, 3, 5, 7, 9, 11, 13, 15, 17, 18, 19,
-            91, 92, 93, 94, 95,
-            96, 97, 98, 99,
-            100, 101, 102, 103,
-            104, 105, 106, 107,
-            108, 109, 110, 111
-        ]
-        left_lower_body_kpt_ids = [
-            11, 13, 15, 17, 18, 19  # left_hip, left_knee, left_ankle, left_big_toe, left_small_toe, left_heel
-        ]
-
-        left_right_body_kpt_ids = [
-            # Upper Body
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-
-            # Lower Body
-            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-
-            # Left Hand (Root + Fingers)
-            91, 92, 93, 94, 95,
-            96, 97, 98, 99,
-            100, 101, 102, 103,
-            104, 105, 106, 107,
-            108, 109, 110, 111,
-
-            # Right Hand (Root + Fingers)
-            112, 113, 114, 115, 116,
-            117, 118, 119, 120,
-            121, 122, 123, 124,
-            125, 126, 127, 128,
-            129, 130, 131, 132
-        ]
-
-        which_kpts = left_right_body_kpt_ids
 
         if skeleton_style == 'openpose':
             return self._draw_instances_kpts_openpose(image, instances, kpt_thr)
@@ -369,7 +304,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                 # draw links
                 if self.skeleton is not None and self.link_color is not None:
 
-                    print(self.skeleton)
+                    #print(self.skeleton)
 
                     # get color
                     if self.link_color is None or isinstance(self.link_color, str):
@@ -386,7 +321,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                     for sk_id, sk in enumerate(self.skeleton):
                         
                         # skip irrelevant limbs
-                        if sk[0] in which_kpts and sk[1] in which_kpts:
+                        if sk[0] in show_kpt_subset and sk[1] in show_kpt_subset:
                             pass
                         else:
                             continue
@@ -432,7 +367,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                         continue
 
                     #print(kid, kid not in right_body_kpt_ids)
-                    if kid not in which_kpts:
+                    if kid not in show_kpt_subset:
                         continue
                     #print("kid", kid)
 
@@ -677,6 +612,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                        draw_heatmap: bool = False,
                        draw_bbox: bool = False,
                        show_kpt_idx: bool = False,
+                       show_kpt_subset: Optional[List[int]] = None,
                        skeleton_style: str = 'mmpose',
                        show: bool = False,
                        wait_time: float = 0,
@@ -750,7 +686,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
 
             # draw bboxes & keypoints
             if 'pred_instances' in data_sample:
-                pred_img_data = self._draw_instances_kpts(pred_img_data, data_sample.pred_instances, kpt_thr,show_kpt_idx, skeleton_style)
+                pred_img_data = self._draw_instances_kpts(pred_img_data, data_sample.pred_instances, kpt_thr, show_kpt_idx, show_kpt_subset, skeleton_style)
                 if draw_bbox:
                     pred_img_data = self._draw_instances_bbox(pred_img_data, data_sample.pred_instances)
 

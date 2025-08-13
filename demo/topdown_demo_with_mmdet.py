@@ -19,9 +19,9 @@ from mmpose.registry import VISUALIZERS
 from mmpose.structures import merge_data_samples, split_instances
 from mmpose.utils import adapt_mmdet_pipeline
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from utils_variables import skeleton, left_right_body_kpt_ids
+import ast
+from utils_variables import presets
+from utils_3d import extract_intrinsics_from_depth, compute_3d_skeletons, visualize_3d_skeletons
 
 try:
     from mmdet.apis import inference_detector, init_detector
@@ -34,33 +34,6 @@ try:
 except (ImportError, ModuleNotFoundError):
     sys.exit()
 
-def set_axes_equal(ax):
-    '''Set 3D plot axes to equal scale.'''
-    x_limits = ax.get_xlim3d()
-    y_limits = ax.get_ylim3d()
-    z_limits = ax.get_zlim3d()
-
-    x_range = abs(x_limits[1] - x_limits[0])
-    x_middle = np.mean(x_limits)
-    y_range = abs(y_limits[1] - y_limits[0])
-    y_middle = np.mean(y_limits)
-    z_range = abs(z_limits[1] - z_limits[0])
-    z_middle = np.mean(z_limits)
-
-    plot_radius = 0.5 * max([x_range, y_range, z_range])
-
-    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
-    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
-    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
-
-def deproject(depth_val, x, y, intrin):
-        fx, fy = intrin["fx"], intrin["fy"]
-        ppx, ppy = intrin["ppx"], intrin["ppy"]
-        X = (x - ppx) * depth_val / fx
-        Y = (y - ppy) * depth_val / fy
-        Z = depth_val
-        return [X, Y, Z]
-
 def process_one_image(args,
                       color_img,
                       depth_img,
@@ -69,6 +42,8 @@ def process_one_image(args,
                       visualizer=None,
                       show_interval=0):
     """Visualize predicted keypoints (and heatmaps) of one image."""
+
+    #################### prediction
 
     # predict bbox
     det_result = inference_detector(detector, color_img)
@@ -81,6 +56,8 @@ def process_one_image(args,
     # predict keypoints
     pose_results = inference_topdown(pose_estimator, color_img, bboxes)
     data_samples = merge_data_samples(pose_results)
+
+    #################### 2D visualization
 
     if isinstance(color_img, str):
         color_img = mmcv.imread(color_img, channel_order='rgb')
@@ -97,13 +74,15 @@ def process_one_image(args,
             draw_heatmap=args.draw_heatmap,
             draw_bbox=args.draw_bbox,
             show_kpt_idx=args.show_kpt_idx,
+            show_kpt_subset=args.show_kpt_subset,
             skeleton_style=args.skeleton_style,
             show=args.show,
             wait_time=show_interval,
             kpt_thr=args.kpt_thr)
 
-    # === Save snapshot every frame ===
-    if 1: #data_samples.get('pred_instances', None) is not None:
+    #################### save predictions for debugging
+
+    if args.save_predictions and data_samples.get('pred_instances', None) is not None:
         timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # add ms to avoid collision
         os.makedirs("snapshots", exist_ok=True)
 
@@ -163,75 +142,105 @@ def process_one_image(args,
 
         print(f"[✔] Frame saved: snapshots/image_{timestamp}.png")
 
-    try:
-        depth_intrin = depth_img.profile.as_video_stream_profile().get_intrinsics()
-        intrin_dict = {
-            "fx": depth_intrin.fx,
-            "fy": depth_intrin.fy,
-            "ppx": depth_intrin.ppx,
-            "ppy": depth_intrin.ppy,
-            "depth_scale": 0.001  # RealSense default
-        }
-    except Exception as e:
-        print(f"[!] Cannot extract intrinsics for 3D viz: {e}")
-        return data_samples.get('pred_instances', None)
+    #################### 3D computation and visualization                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
 
-    pred = data_samples.pred_instances
+    if depth_img is not None:
+        intrin_dict = extract_intrinsics_from_depth(depth_img)
+        if intrin_dict is not None:
+            pred = data_samples.pred_instances
 
-    # Convert to numpy (safe for torch.Tensor)
-    keypoints = pred.get('transformed_keypoints', pred.keypoints)
-    if hasattr(keypoints, 'cpu'):
-        keypoints = keypoints.cpu().numpy()  # [N, J, 2]
-    visibility = pred.get('keypoints_visible', None)
-    if visibility is None:
-        visibility = np.ones(keypoints.shape[:2])
-    elif hasattr(visibility, 'cpu'):
-        visibility = visibility.cpu().numpy()
+            # Convert to numpy (safe for torch.Tensor)
+            keypoints = pred.get('transformed_keypoints', pred.keypoints)
+            if hasattr(keypoints, 'cpu'):
+                keypoints = keypoints.cpu().numpy()  # [N, J, 2]
 
-    if keypoints.shape[0] == 0:
-        return pred  # no person detected
+            visibility = pred.get('keypoints_visible', None)
+            if visibility is None:
+                visibility = np.ones(keypoints.shape[:2])
+            elif hasattr(visibility, 'cpu'):
+                visibility = visibility.cpu().numpy()
 
-    # Plot setup
-    fig = plt.gcf()
-    fig.clf()  # Clear only the current figure (preserve window)
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_title("3D Skeleton")
+            if keypoints.shape[0] > 0:
+                # ---- 3D computation (no plotting here) ----
+                joint_xyz_list = compute_3d_skeletons(
+                    keypoints, visibility, depth_img, intrin_dict, args.kpt_thr
+                )
 
-    for person_kpts, person_vis in zip(keypoints, visibility):
-        joint_xyz = []
+                # ---- 3D visualization (optional) ----
+                if getattr(args, "show3d", False):
+                    visualize_3d_skeletons(
+                        joint_xyz_list, skeleton, args.show_kpt_subset, args.kpt_thr
+                    )
 
-        for (x, y), v in zip(person_kpts, person_vis):
-            if v > args.kpt_thr and 0 <= int(x) < depth_img.width and 0 <= int(y) < depth_img.height:
-                depth_val = depth_img.get_distance(int(x), int(y))
-                if depth_val and depth_val > 0:
-                    joint_xyz.append(deproject(depth_val, x, y, intrin_dict))
-                else:
-                    joint_xyz.append([np.nan, np.nan, np.nan])
-            else:
-                joint_xyz.append([np.nan, np.nan, np.nan])
+    # try:
+    #     depth_intrin = depth_img.profile.as_video_stream_profile().get_intrinsics()
+    #     intrin_dict = {
+    #         "fx": depth_intrin.fx,
+    #         "fy": depth_intrin.fy,
+    #         "ppx": depth_intrin.ppx,
+    #         "ppy": depth_intrin.ppy,
+    #         "depth_scale": 0.001  # RealSense default
+    #     }
+    # except Exception as e:
+    #     print(f"[!] Cannot extract intrinsics for 3D viz: {e}")
+    #     return data_samples.get('pred_instances', None)
 
-        joint_xyz = np.array(joint_xyz)
+    # pred = data_samples.pred_instances
 
-        for j, (x, y, z) in enumerate(joint_xyz):
-            if not np.isnan(z) and j in left_right_body_kpt_ids:
-                ax.scatter(x, y, z, c='green', s=10)
+    # # Convert to numpy (safe for torch.Tensor)
+    # keypoints = pred.get('transformed_keypoints', pred.keypoints)
+    # if hasattr(keypoints, 'cpu'):
+    #     keypoints = keypoints.cpu().numpy()  # [N, J, 2]
+    # visibility = pred.get('keypoints_visible', None)
+    # if visibility is None:
+    #     visibility = np.ones(keypoints.shape[:2])
+    # elif hasattr(visibility, 'cpu'):
+    #     visibility = visibility.cpu().numpy()
 
-        for idx1, idx2 in skeleton:
-            if idx1 < len(joint_xyz) and idx2 < len(joint_xyz):
-                pt1, pt2 = joint_xyz[idx1], joint_xyz[idx2]
-                if not np.any(np.isnan(pt1)) and not np.any(np.isnan(pt2)):
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], [pt1[2], pt2[2]], c='blue', linewidth=2)
+    # if keypoints.shape[0] == 0:
+    #     return pred  # no person detected
+
+    # # Plot setup
+    # fig = plt.gcf()
+    # fig.clf()  # Clear only the current figure (preserve window)
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.set_title("3D Skeleton")
+
+    # for person_kpts, person_vis in zip(keypoints, visibility):
+    #     joint_xyz = []
+
+    #     for (x, y), v in zip(person_kpts, person_vis):
+    #         if v > args.kpt_thr and 0 <= int(x) < depth_img.width and 0 <= int(y) < depth_img.height:
+    #             depth_val = depth_img.get_distance(int(x), int(y))
+    #             if depth_val and depth_val > 0:
+    #                 joint_xyz.append(deproject(depth_val, x, y, intrin_dict))
+    #             else:
+    #                 joint_xyz.append([np.nan, np.nan, np.nan])
+    #         else:
+    #             joint_xyz.append([np.nan, np.nan, np.nan])
+
+    #     joint_xyz = np.array(joint_xyz)
+
+    #     for j, (x, y, z) in enumerate(joint_xyz):
+    #         if not np.isnan(z) and j in args.show_kpt_subset:
+    #             ax.scatter(x, y, z, c='green', s=10)
+
+    #     for idx1, idx2 in skeleton:
+    #         if idx1 < len(joint_xyz) and idx2 < len(joint_xyz):
+    #             pt1, pt2 = joint_xyz[idx1], joint_xyz[idx2]
+    #             if not np.any(np.isnan(pt1)) and not np.any(np.isnan(pt2)):
+    #                 ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], [pt1[2], pt2[2]], c='blue', linewidth=2)
                     
-    ax.set_xlim(-1.0, 1.0)
-    ax.set_ylim(-1.0, 1.0)
-    ax.set_zlim(0.0, 3.0)
-    set_axes_equal(ax)
+    # ax.set_xlim(-1.0, 1.0)
+    # ax.set_ylim(-1.0, 1.0)
+    # ax.set_zlim(0.0, 3.0)
+    # set_axes_equal(ax)
 
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_zlabel("Z (m)")
-    ax.view_init(elev=-80, azim=-90)
-    plt.pause(0.001)  # Refresh the plot without blocking
+    # ax.set_xlabel("X (m)")
+    # ax.set_ylabel("Y (m)")
+    # ax.set_zlabel("Z (m)")
+    # ax.view_init(elev=-80, azim=-90)
+    # plt.pause(0.001)  # Refresh the plot without blocking
 
     return data_samples.get('pred_instances', None)
 
@@ -321,11 +330,21 @@ def main():
     parser.add_argument(
         '--alpha', type=float, default=0.8, help='The transparency of bboxes')
     parser.add_argument(
-        '--draw-bbox', action='store_true', help='Draw bboxes of instances')
+        '--draw-bbox', action='store_true', help='Draw bboxes of instances')    
+    
+    #################### my extra arguments
+    parser.add_argument(
+        '--save_predictions', action='store_true', help='Save predictions to a folder')
+    parser.add_argument(
+        '--show_kpt_subset', default="full_body", type=str)
+    parser.add_argument(
+        '--show3d', action='store_true')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
+    #################### parse args
     args = parser.parse_args()
+    args.show_kpt_subset = presets[args.show_kpt_subset]
 
     assert args.show or (args.output_root != '')
     assert args.input != ''
@@ -425,21 +444,6 @@ def main():
 
                 # run pose estimator
                 pred_instances  = process_one_image(args, color_image, depth_image, detector, pose_estimator, visualizer, 0.001)
-
-                # convert depth to numpy array
-                # depth_image_raw = np.asanyarray(depth_frame.get_data())  # uint16
-                # depth_colormap = cv2.applyColorMap(
-                #     cv2.convertScaleAbs(depth_image_raw, alpha=0.03),
-                #     cv2.COLORMAP_JET
-                # )
-
-                # # --- Depth overlay on color ---
-                # height, width = depth_image_raw.shape
-                # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width))
-                # depth_data = depth_data.astype(np.float32) * depth_scale  # convert to meters
-                # normalized_depth    = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                # depth_overlay       = cv2.applyColorMap(normalized_depth, cv2.COLORMAP_JET)
-                # blended             = cv2.addWeighted(color_image, 0.5, depth_overlay, 0.5, 0)
 
                 if args.show:
                     # press ESC to exit
