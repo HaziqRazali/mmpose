@@ -21,6 +21,7 @@ from mmpose.utils import adapt_mmdet_pipeline
 
 import ast
 from utils_variables import presets
+from utils import set_kpt_preset, handle_hotkeys_for_presets
 from utils_3d import extract_intrinsics_from_depth, compute_3d_skeletons, visualize_3d_skeletons
 
 try:
@@ -76,9 +77,15 @@ def process_one_image(args,
             show_kpt_idx=args.show_kpt_idx,
             show_kpt_subset=args.show_kpt_subset,
             skeleton_style=args.skeleton_style,
-            show=args.show,
-            wait_time=show_interval,
+            show=False, #show=args.show,
+            wait_time=0, #wait_time=show_interval,
             kpt_thr=args.kpt_thr)
+
+    # you own the window + keys
+    frame_vis = visualizer.get_image()
+    cv2.imshow("Pose", mmcv.rgb2bgr(frame_vis))
+    key = cv2.pollKey() if hasattr(cv2, "pollKey") else cv2.waitKey(1)
+    handle_hotkeys_for_presets(args, key)
 
     #################### save predictions for debugging
 
@@ -161,12 +168,18 @@ def process_one_image(args,
                 visibility = visibility.cpu().numpy()
 
             if keypoints.shape[0] > 0:
-                # ---- 3D computation (no plotting here) ----
+                # 3D computation
                 joint_xyz_list = compute_3d_skeletons(
                     keypoints, visibility, depth_img, intrin_dict, args.kpt_thr
                 )
 
-                # ---- 3D visualization (optional) ----
+                # 3D angle estimation
+                
+
+                # 3D rom estimation
+
+
+                # 3D visualization
                 if getattr(args, "show3d", False):
                     visualize_3d_skeletons(
                         joint_xyz_list, skeleton, args.show_kpt_subset, args.kpt_thr
@@ -333,18 +346,17 @@ def main():
         '--draw-bbox', action='store_true', help='Draw bboxes of instances')    
     
     #################### my extra arguments
-    parser.add_argument(
-        '--save_predictions', action='store_true', help='Save predictions to a folder')
-    parser.add_argument(
-        '--show_kpt_subset', default="full_body", type=str)
-    parser.add_argument(
-        '--show3d', action='store_true')
+    parser.add_argument('--save_predictions', action='store_true', help='Save predictions to a folder')
+    parser.add_argument('--show_kpt_subset', default="full_body", type=str)
+    parser.add_argument('--show3d', action='store_true')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
     #################### parse args
     args = parser.parse_args()
-    args.show_kpt_subset = presets[args.show_kpt_subset]
+    #args.show_kpt_subset = presets[args.show_kpt_subset]
+    args.kpt_preset_name = args.show_kpt_subset
+    set_kpt_preset(args, args.kpt_preset_name)
 
     assert args.show or (args.output_root != '')
     assert args.input != ''
@@ -446,10 +458,12 @@ def main():
                 pred_instances  = process_one_image(args, color_image, depth_image, detector, pose_estimator, visualizer, 0.001)
 
                 if args.show:
-                    # press ESC to exit
-                    if cv2.waitKey(5) & 0xFF == 27:
+                    key = cv2.waitKey(1) & 0xFF   # minimal block; still processes window events
+                    if key == 27:
                         break
-                    time.sleep(args.show_interval)
+                    handle_hotkeys_for_presets(args, key)
+                    if args.show_interval > 0:     # only sleep if you *want* to slow display
+                        time.sleep(args.show_interval)
 
         finally:
             pipeline.stop()
