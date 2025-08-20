@@ -102,3 +102,44 @@ def visualize_3d_skeletons(joint_xyz_list, skeleton, show_kpt_subset, kpt_thr):
     ax.set_zlabel("Z (m)")
     ax.view_init(elev=-80, azim=-90)
     plt.pause(0.001)  # Refresh the plot without blocking
+
+def angle(p_a, p_b, p_c, zero_at_extension=False):
+    
+    """
+    Angle at vertex B formed by segments A-B and C-B (degrees).
+
+    Each of p_a, p_b, p_c can be:
+      - a single point: shape (D,)
+      - a list/array of points: shape (K, D) -> averaged (NaN-safe) to (D,)
+
+    If zero_at_extension=True: 0° at full extension, increases with flexion.
+    Works for 2D, 3D, ... nD points.
+    """
+
+    def _avg_point(p):
+        arr = np.asarray(p, dtype=float)
+        if arr.ndim == 1:
+            return arr
+        elif arr.ndim == 2:
+            # average multiple points; ignores NaNs if present
+            return np.nanmean(arr, axis=0)
+        else:
+            raise ValueError("Each input must be shape (D,) or (K, D).")
+
+    A = _avg_point(p_a)
+    B = _avg_point(p_b)
+    C = _avg_point(p_c)
+
+    if np.any(np.isnan(A)) or np.any(np.isnan(B)) or np.any(np.isnan(C)):
+        return np.nan
+
+    u = A - B
+    v = C - B
+    nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+    if not (np.isfinite(nu) and np.isfinite(nv)) or nu < 1e-6 or nv < 1e-6:
+        return np.nan
+
+    u /= nu; v /= nv
+    cosang = np.clip(np.dot(u, v), -1.0, 1.0)
+    raw = np.degrees(np.arccos(cosang))  # 0 aligned, 180 opposite
+    return 180.0 - raw if zero_at_extension else raw
