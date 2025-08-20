@@ -200,6 +200,7 @@ class SessionState:
         self.last_metrics_a = {}
         self.last_metrics_p = {}
         self.delta_ema = None
+        self.angle_series = deque()
 
 # =========================
 # Core Processing Function
@@ -330,26 +331,27 @@ def process_one_image(args,
             hud_lines.append(f"ROM STARTED  (baseline {state.rom_baseline:.1f} deg)")
         else:
             hud_lines.append("ROM STARTED")
+        
         # Show the last known angle even if this frame misses detections
-        if getattr(state, "last_angle", None) is not None:
-            delta = state.last_angle - (state.rom_baseline or 0.0)
-            hud_lines.append(f"Angle: {state.last_angle:.1f} deg   Delta: {delta:+.1f} deg")
+        #if getattr(state, "last_angle", None) is not None:
+        #    delta = state.last_angle - (state.rom_baseline or 0.0)
+        #    hud_lines.append(f"Angle: {state.last_angle:.1f} deg   Delta: {delta:+.1f} deg")
 
-        # if getattr(state, "last_angle", None) is not None and state.rom_baseline is not None:
-        #     raw_delta = state.last_angle - state.rom_baseline
+        if getattr(state, "last_angle", None) is not None and state.rom_baseline is not None:
+            raw_delta = state.last_angle - state.rom_baseline
 
-        #     # EMA smoothing for display (optional)
-        #     if args.delta_ema_alpha > 0.0:
-        #         if state.delta_ema is None or not np.isfinite(state.delta_ema):
-        #             state.delta_ema = float(raw_delta)
-        #         else:
-        #             a = float(args.delta_ema_alpha)
-        #             state.delta_ema = a * float(raw_delta) + (1.0 - a) * state.delta_ema
-        #         disp_delta = state.delta_ema
-        #     else:
-        #         disp_delta = raw_delta
+            # EMA smoothing for display (optional)
+            if args.delta_ema_alpha > 0.0:
+                if state.delta_ema is None or not np.isfinite(state.delta_ema):
+                    state.delta_ema = float(raw_delta)
+                else:
+                    a = float(args.delta_ema_alpha)
+                    state.delta_ema = a * float(raw_delta) + (1.0 - a) * state.delta_ema
+                disp_delta = state.delta_ema
+            else:
+                disp_delta = raw_delta
 
-        #     hud_lines.append(f"Angle: {state.last_angle:.1f} deg   d={disp_delta:+.1f} deg")
+            hud_lines.append(f"Angle: {state.last_angle:.1f} deg   d={disp_delta:+.1f} deg")
 
     if (depth_img is not None) and (pred is not None):
         intrin_dict = extract_intrinsics_from_depth(depth_img)
@@ -384,6 +386,13 @@ def process_one_image(args,
 
                 if state is not None and np.isfinite(angle_t):
                     state.last_angle = float(angle_t)
+
+                # Add to rolling series for sparkline and prune by time
+                if args.plot_seconds > 0 and np.isfinite(angle_t):
+                    state.angle_series.append((t_now, float(angle_t)))
+                    cutoff = t_now - float(args.plot_seconds)
+                    while state.angle_series and state.angle_series[0][0] < cutoff:
+                        state.angle_series.popleft()
 
                 # -------------- STABILITY --------------
                 if state is not None and not state.rom_started:
@@ -464,6 +473,53 @@ def process_one_image(args,
         for line in hud_lines:
             cv2.putText(frame_bgr, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 240, 0), 2, cv2.LINE_AA)
             y += 22
+
+        # ----- Sparkline: angle over last X seconds -----
+        if args.plot_seconds > 0 and len(state.angle_series) >= 2:
+            # Filter out any non-finite samples first
+            series = [(t, a) for (t, a) in state.angle_series if np.isfinite(a)]
+            if len(series) >= 2:
+                H, W = frame_bgr.shape[:2]
+                pw, ph, pm = int(args.plot_width), int(args.plot_height), int(args.plot_margin)
+                x0 = max(0, W - pw - pm)
+                y0 = pm
+                x1 = min(W - 1, x0 + pw)
+                y1 = min(H - 1, y0 + ph)
+
+                # time window
+                t0 = t_now - float(args.plot_seconds)  # reuse the frame timestamp you already have
+                ts = [max(t0, t) for (t, _) in series]
+                ys = [a for (_, a) in series]
+
+                # y scale (pad if flat)
+                y_min = min(ys); y_max = max(ys)
+                if not np.isfinite(y_min) or not np.isfinite(y_max) or abs(y_max - y_min) < 1e-6:
+                    y_min, y_max = (0.0, 1.0) if not np.isfinite(y_min) or not np.isfinite(y_max) else (y_min - 1.0, y_max + 1.0)
+
+                def map_pt(t, y):
+                    # time maps left->right
+                    tx = (t - t0) / max(args.plot_seconds, 1e-6)
+                    tx = 0.0 if not np.isfinite(tx) else min(max(tx, 0.0), 1.0)
+                    px = int(round(x0 + tx * (x1 - x0)))
+                    # angle maps bottom->top
+                    ty = (y - y_min) / max((y_max - y_min), 1e-6)
+                    ty = 0.0 if not np.isfinite(ty) else min(max(ty, 0.0), 1.0)
+                    py = int(round(y1 - ty * (y1 - y0)))
+                    return px, py
+
+                # background + border
+                cv2.rectangle(frame_bgr, (x0, y0), (x1, y1), (32, 32, 32), thickness=-1)
+                cv2.rectangle(frame_bgr, (x0, y0), (x1, y1), (180, 180, 180), thickness=1)
+
+                # polyline
+                pts = [map_pt(t, y) for (t, y) in zip(ts, ys)]
+                cv2.polylines(frame_bgr, [np.array(pts, dtype=np.int32)], isClosed=False, color=(0, 255, 0), thickness=2, lineType=cv2.LINE_AA)
+
+                # labels
+                if getattr(state, "last_angle", None) is not None and np.isfinite(state.last_angle):
+                    cv2.putText(frame_bgr, f"{state.last_angle:.1f} deg", (x0 + 6, y0 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+                cv2.putText(frame_bgr, f"[{y_min:.1f}, {y_max:.1f}]", (x0 + 6, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,200,200), 1, cv2.LINE_AA)
+        # ----- end sparkline -----
 
         cv2.imshow("Pose", frame_bgr)
         key = cv2.pollKey() if hasattr(cv2, "pollKey") else cv2.waitKey(1)
@@ -597,6 +653,15 @@ def main():
 
     parser.add_argument('--delta-ema-alpha', type=float, default=0.3,
                     help='EMA smoothing for delta after ROM starts (0 disables)')
+
+    parser.add_argument('--plot-seconds', type=float, default=5.0,
+                    help='Show a rolling sparkline of the angle over the last X seconds (0 to disable)')
+    parser.add_argument('--plot-width', type=int, default=240,
+                        help='Sparkline width in pixels')
+    parser.add_argument('--plot-height', type=int, default=80,
+                        help='Sparkline height in pixels')
+    parser.add_argument('--plot-margin', type=int, default=10,
+                        help='Margin from edges for the sparkline rectangle')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
