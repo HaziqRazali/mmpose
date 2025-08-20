@@ -1,8 +1,8 @@
 
 # https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
-
+import os
 import sys
-sys.path.append("/home/haziq/mmpose/configs/_base_/datasets/")
+sys.path.append(os.path.join(os.path.expanduser("~"),"mmpose/configs/_base_/datasets/"))
 import coco_wholebody as cw
 
 
@@ -54,17 +54,21 @@ right_lower_body_kpt_ids = [
     12, 14, 16, 20, 21, 22  # right_hip, right_knee, right_ankle, right_big_toe, right_small_toe, right_heel
 ]
 
+right_ankle_rom_ids = [14,16,20,21]
+right_elbow_rom_ids = [6,8,10]
+
 presets = {
     "full_body": full_body,
+    "right_ankle_rom":right_ankle_rom_ids, 
+    "right_elbow_rom":right_elbow_rom_ids,
     "133": [i for i in range(0,133)],
 }
 
 # key in specific test and the app computes the ROM
 rom_test = {
 
-
     "left_elbow_flexion":   [5,7,9,True],
-    "right_elbow_flexion":  [6,8,9,True],
-
+    "right_elbow_flexion":  right_elbow_rom_ids + [True],
+    "right_ankle_flexion":  [14,16,[20,21],True],
 
 }
