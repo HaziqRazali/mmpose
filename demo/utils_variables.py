@@ -1,4 +1,8 @@
 
+<<<<<<< HEAD
+=======
+# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
+>>>>>>> 6dc8ca25dd1724c5bc59a6ff6995134495b741fd
 import os
 import sys
 sys.path.append(os.path.join(os.path.expanduser("~"),"mmpose/configs/_base_/datasets/"))
