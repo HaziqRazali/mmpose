@@ -103,8 +103,7 @@ def visualize_3d_skeletons(joint_xyz_list, skeleton, show_kpt_subset, kpt_thr):
     ax.view_init(elev=-80, azim=-90)
     plt.pause(0.001)  # Refresh the plot without blocking
 
-def angle(p_a, p_b, p_c, zero_at_extension=False):
-    
+def angle(p_a, p_b, p_c):
     """
     Angle at vertex B formed by segments A-B and C-B (degrees).
 
@@ -112,7 +111,6 @@ def angle(p_a, p_b, p_c, zero_at_extension=False):
       - a single point: shape (D,)
       - a list/array of points: shape (K, D) -> averaged (NaN-safe) to (D,)
 
-    If zero_at_extension=True: 0° at full extension, increases with flexion.
     Works for 2D, 3D, ... nD points.
     """
 
@@ -139,7 +137,8 @@ def angle(p_a, p_b, p_c, zero_at_extension=False):
     if not (np.isfinite(nu) and np.isfinite(nv)) or nu < 1e-6 or nv < 1e-6:
         return np.nan
 
-    u /= nu; v /= nv
+    u /= nu
+    v /= nv
     cosang = np.clip(np.dot(u, v), -1.0, 1.0)
-    raw = np.degrees(np.arccos(cosang))  # 0 aligned, 180 opposite
-    return 180.0 - raw if zero_at_extension else raw
+    raw = np.degrees(np.arccos(cosang))  # 0 = aligned, 180 = opposite
+    return raw

@@ -1,12 +1,14 @@
 
-# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
 import os
 import sys
 sys.path.append(os.path.join(os.path.expanduser("~"),"mmpose/configs/_base_/datasets/"))
 import coco_wholebody as cw
 
+# joint names to id mapping
+# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
 
 full_body = [
+
     # Upper Body
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 
@@ -26,6 +28,7 @@ full_body = [
     121, 122, 123, 124,
     125, 126, 127, 128,
     129, 130, 131, 132
+
     ]
 
 lower_left_body = [
@@ -56,19 +59,17 @@ right_lower_body_kpt_ids = [
 
 right_ankle_rom_ids = [14,16,20,21]
 right_elbow_rom_ids = [6,8,10]
-
-presets = {
-    "full_body": full_body,
-    "right_ankle_rom":right_ankle_rom_ids, 
-    "right_elbow_rom":right_elbow_rom_ids,
-    "133": [i for i in range(0,133)],
-}
+right_shoulder_rom_ids = [12,6,8]
 
 # key in specific test and the app computes the ROM
 rom_test = {
 
-    "left_elbow_flexion":   [5,7,9,True],
-    "right_elbow_flexion":  right_elbow_rom_ids + [True],
-    "right_ankle_flexion":  [14,16,[20,21],True],
+    "full_body": full_body,
+    "133": [i for i in range(0,133)],
+
+    "left_elbow_flexion":   [5,7,9],
+    "right_elbow_flexion":  [6,8,10],
+    "right_ankle_flexion":  [14,16,[20,21]],
+    "right_shoulder_abduction": [12,6,8],
 
 }
