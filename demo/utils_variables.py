@@ -1,8 +1,4 @@
 
-<<<<<<< HEAD
-=======
-# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
->>>>>>> 6dc8ca25dd1724c5bc59a6ff6995134495b741fd
 import os
 import sys
 sys.path.append(os.path.join(os.path.expanduser("~"),"mmpose/configs/_base_/datasets/"))
@@ -68,12 +64,36 @@ right_shoulder_rom_ids = [12,6,8]
 # key in specific test and the app computes the ROM
 rom_test = {
 
+    # no rom computation
     "full_body": full_body,
     "133": [i for i in range(0,133)],
 
+    # rom computation
+    # elbow
     "left_elbow_flexion":   [5,7,9],
     "right_elbow_flexion":  [6,8,10],
-    "right_ankle_flexion":  [14,16,[20,21]],
-    "right_shoulder_abduction": [12,6,8],
+
+    # shoulder
+    "left_shoulder_flexion":        [11,5,7],
+    "right_shoulder_flexion":       [12,6,8],
+    "left_shoulder_abduction":      [11,5,7],
+    "right_shoulder_abduction":     [12,6,8],
+    "left_shoulder_external_rotation":  [7,5,9],
+    "right_shoulder_external_rotation": [8,6,10],
+    "left_shoulder_internal_rotation":  [7,5,9],
+    "right_shoulder_internal_rotation": [8,6,10],
+
+    # knee
+    "left_knee_flexion":     [11,13,15],
+    "right_knee_flexion":    [12,14,16],
+    "left_knee_extension":   [11,13,15],
+    "right_knee_extension":  [12,14,16],
+
+    # ankle
+    "left_ankle_dorsiflexion":     [13,15,[17,18]],
+    "right_ankle_dorsiflexion":    [14,16,[20,21]],
+    "left_ankle_plantarflexion":   [13,15,[17,18]],
+    "right_ankle_plantarflexion":  [14,16,[20,21]],
+
 
 }
