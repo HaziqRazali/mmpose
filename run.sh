@@ -35,8 +35,6 @@ python demo/topdown_demo_with_mmdet.py \
   --input webcam \
   --show \
   --voice --voice-mic "plughw:CARD=L1080p,DEV=0" \
-  --voice-key "" \
-  --voice-region "southeastasia" \
   --output-root out \
   --auto-rom \
   --rom-v-go 30 \
@@ -47,7 +45,8 @@ python demo/topdown_demo_with_mmdet.py \
   --rom-start-amp 8 \
   --rom-baseline-tol 12 \
   --rom-baseline-hold-sec 0.5 \
-  --rom-timeout-sec 25
+  --rom-timeout-sec 25 \
+  --plot-seconds 0
 
 # video
 python demo/topdown_demo_with_mmdet.py \

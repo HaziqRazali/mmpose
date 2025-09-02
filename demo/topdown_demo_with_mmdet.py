@@ -201,20 +201,66 @@ def render_sparkline_strip(width, height, series, t_now, window_sec, label_text=
 # Voice mapping
 # =========================
 
-VOICE_PRESET_ALIASES = {
-    "full_body": [
-        r"\bfull body\b", r"\bwhole body\b", r"\ball body\b", r"\bbody full\b", r"\bmode one\b", r"\b1\b"
-    ],
-    "right_elbow_flexion": [
-        r"\bright elbow\b.*\bflexion\b", r"\belbow flexion\b", r"\bright elbow\b", r"\belbow\b", r"\bmode two\b", r"\b2\b"
-    ],
-    "right_shoulder_abduction": [
-        r"\bright\s+shou?ld?er\b.*\babduction\b",
-        r"\bshoulde?r abduction\b",
-        r"\bright shoulder abduction\b",
-        r"\bright shoulder\b", r"\bshoulder\b", r"\bmode three\b", r"\b3\b"
-    ],
-}
+def _build_voice_aliases_from_rom(rom_test_dict):
+    """
+    Build VOICE_PRESET_ALIASES automatically from rom_test keys.
+    For each preset name (e.g., 'right_elbow_flexion'), generate:
+      - exact phrase:        r"\bright elbow flexion\b"
+      - flexible token path: r"\bright\b.*\belbow\b.*\bflexion\b"
+      - side+joint variants: r"\bright\b.*\belbow\b", r"\bright\b.*\belbow\b.*\bflexion\b"
+      - special cases:       'full_body' and '133'
+      - numeric alias:       'mode {i}' and '{i}' based on ordering
+    """
+    aliases = {}
+    preset_names = list(rom_test_dict.keys())
+
+    for i, name in enumerate(preset_names, start=1):
+        toks = name.split('_')
+        human = ' '.join(toks)
+        patterns = []
+
+        # exact "humanized" phrase
+        patterns.append(rf"\b{re.escape(human)}\b")
+
+        # flexible token order with gaps allowed (tokens in order)
+        patterns.append(r"\b" + r"\b.*\b".join(map(re.escape, toks)) + r"\b")
+
+        # side + joint (+ first action token) variants
+        if toks and toks[0] in ('left', 'right') and len(toks) >= 2:
+            side = toks[0]
+            joint = toks[1]
+            patterns.append(rf"\b{re.escape(side)}\b.*\b{re.escape(joint)}\b")
+            if len(toks) >= 3:
+                action = toks[2]
+                patterns.append(rf"\b{re.escape(side)}\b.*\b{re.escape(joint)}\b.*\b{re.escape(action)}\b")
+
+        # special presets
+        if name == 'full_body':
+            patterns.extend([
+                r"\bfull body\b", r"\bwhole body\b", r"\ball body\b", r"\bbody\b"
+            ])
+        if name == '133':
+            patterns.extend([
+                r"\b133\b", r"\bone thirty three\b", r"\bone three three\b"
+            ])
+
+        # numeric aliases (ordered by rom_test key order)
+        patterns.append(rf"\bmode {i}\b")
+        patterns.append(rf"\b{i}\b")
+
+        # de-dup while preserving order
+        seen = set()
+        dedup = []
+        for p in patterns:
+            if p not in seen:
+                seen.add(p)
+                dedup.append(p)
+
+        aliases[name] = dedup
+
+    return aliases
+
+VOICE_PRESET_ALIASES = _build_voice_aliases_from_rom(rom_test)
 
 VOICE_COMMAND_PATTERNS = {
     "next": [r"\bnext\b", r"\bforward\b", r"\bgo next\b"],
@@ -554,8 +600,10 @@ def _update_best_pair_if_possible(args, state: SessionState):
             last_max = None
 
 
-def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr):
-    """Finalize when the patient returns & holds near baseline, or on timeout."""
+def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr=None):
+    """Finalize when the patient returns & holds near baseline, or on timeout.
+    combined_bgr: If provided, saved images will include the HUD/sparkline.
+    """
     if not state.trial_active:
         return
 
@@ -609,12 +657,14 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr):
         last_max = next((e for e in reversed(state.extrema_events) if e['kind'] == 'max'), None)
 
         if last_min and (not last_max):
-            baseline_evt = {'kind': 'max', 'ts': t_now, 'angle': 0.0, 'frame': frame_bgr.copy()}
+            # Do NOT attach a frame here; let fallback fill with HUD later
+            baseline_evt = {'kind': 'max', 'ts': t_now, 'angle': 0.0, 'frame': None}
             rom_val = baseline_evt['angle'] - last_min['angle']
             if rom_val >= args.rom_min_amplitude:
                 state.best_pair = {'min': last_min, 'max': baseline_evt, 'rom': rom_val}
         elif last_max and (not last_min):
-            baseline_evt = {'kind': 'min', 'ts': t_now, 'angle': 0.0, 'frame': frame_bgr.copy()}
+            # Do NOT attach a frame here; let fallback fill with HUD later
+            baseline_evt = {'kind': 'min', 'ts': t_now, 'angle': 0.0, 'frame': None}
             rom_val = last_max['angle'] - baseline_evt['angle']
             if rom_val >= args.rom_min_amplitude:
                 state.best_pair = {'min': baseline_evt, 'max': last_max, 'rom': rom_val}
@@ -627,7 +677,7 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr):
             result['max_deg'] = state.baseline_deg
             result['rom_deg'] = 0.0
             img_path = os.path.join(state.rom_save_dir, f"BASELINE_{state.baseline_deg if state.baseline_deg is not None else 0.0:.1f}deg.png")
-            mmcv.imwrite(frame_bgr, img_path)
+            mmcv.imwrite((combined_bgr if combined_bgr is not None else frame_bgr), img_path)
             result['baseline_image'] = img_path
             print("[ROM] No movement detected; saved baseline image.")
         else:
@@ -642,10 +692,12 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr):
         max_evt = best['max']
         rom_val = best['rom']
 
+        # Use HUD frame if available
+        hud_src = combined_bgr if combined_bgr is not None else frame_bgr
         if min_evt.get('frame') is None:
-            min_evt['frame'] = frame_bgr.copy()
+            min_evt['frame'] = hud_src.copy()
         if max_evt.get('frame') is None:
-            max_evt['frame'] = frame_bgr.copy()
+            max_evt['frame'] = hud_src.copy()
 
         min_img_path = os.path.join(state.rom_save_dir, f"MIN_{min_evt['angle']:.1f}deg.png")
         max_img_path = os.path.join(state.rom_save_dir, f"MAX_{max_evt['angle']:.1f}deg.png")
@@ -685,7 +737,6 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr):
     state.trial_armed = False
     state.trial_refractory_until = t_now + args.rom_refractory_sec
 
-
 def process_one_image(args,
                       color_img,
                       depth_img,
@@ -718,9 +769,9 @@ def process_one_image(args,
             state.baseline_deg = None
             state.baseline_set_ts = None
         elif args.rom_test != state.active_rom:
-            # finalize ongoing trial first (if any)
+            # finalize ongoing trial first (if any) — here we don't have HUD yet; pass combined_bgr=None
             if args.auto_rom and state.trial_active:
-                _finalize_if_ready(args, state, time.time(), mmcv.rgb2bgr(color_img.copy()))
+                _finalize_if_ready(args, state, time.time(), mmcv.rgb2bgr(color_img.copy()), combined_bgr=None)
             state.active_rom = args.rom_test
             state.last_angle = None
             state.angle_series.clear()
@@ -871,7 +922,7 @@ def process_one_image(args,
     else:
         angle_disp = angle_t
 
-    # === AUTO-ROM: smoothing + velocity + extrema + segment finalize ========
+    # === AUTO-ROM: smoothing + velocity + extrema + (NO finalize yet) ========
     if args.auto_rom and is_angle_mode and np.isfinite(angle_disp):
         # EMA smoothing
         if state.filt_angle is None:
@@ -926,9 +977,7 @@ def process_one_image(args,
             if state.trial_active:
                 _confirm_hold_and_lock_extremum(args, state, t_now, frame_bgr)
 
-            # finalize only after baseline return (or timeout)
-            _finalize_if_ready(args, state, t_now, frame_bgr)
-
+            # DO NOT finalize here; we want HUD frames in saved images
             state.prev_filt_angle = state.filt_angle
             state.prev_ts = t_now
 
@@ -953,8 +1002,10 @@ def process_one_image(args,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 240, 240), 2, cv2.LINE_AA)
 
     zero_text = "Zeroed" if state.baseline_deg is not None else "Unzeroed"
-    arm_text = "Armed" if state.trial_armed else "Disarmed"
-    cv2.putText(frame_bgr, f"Test: {args.rom_test} | {zero_text} | {arm_text}", (10, 50),
+    arm_text = "Active" if state.trial_active else ("Armed" if state.trial_armed else "Disarmed")
+    cv2.putText(frame_bgr, f"Test: {args.rom_test} | "
+                        f"{'Zeroed' if state.baseline_deg is not None else 'Unzeroed'} | "
+                        f"{arm_text}", (10, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2, cv2.LINE_AA)
 
     H, W = frame_bgr.shape[:2]
@@ -1031,8 +1082,11 @@ def process_one_image(args,
     else:
         key = -1
 
-    return data_samples.get('pred_instances', None), key, combined_bgr
+    # === FINALIZE AFTER HUD IS DRAWN ===
+    if args.auto_rom and is_angle_mode:
+        _finalize_if_ready(args, state, t_now, frame_bgr, combined_bgr)
 
+    return data_samples.get('pred_instances', None), key, combined_bgr
 
 def mouse_callback(event, x, y, flags, param):
     if event == cv2.EVENT_MOUSEMOVE:
