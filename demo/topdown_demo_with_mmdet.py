@@ -127,6 +127,9 @@ class SessionState:
         self.no_motion_reported = False
         self.rom_save_dir = None
 
+        # === SESSION-LEVEL OUTPUT ROOT ===
+        self.session_root = None          # e.g., "<output_root>/20250915_111404"
+        self.session_stamp = None         # e.g., "20250915_111404"
 
 # =========================
 # Sparkline (small angle strip)
@@ -627,12 +630,23 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr
         return
 
     # Prepare folder
-    if state.rom_save_dir is None:
+    # -------------------------
+    # SESSION/TRIAL FOLDER SETUP
+    # -------------------------
+    # 1) ensure a single session folder per run (first finalize defines it)
+    if state.session_root is None:
         root = args.output_root if args.output_root else "."
         mmengine.mkdir_or_exist(root)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        state.rom_save_dir = os.path.join(root, f"rom_{args.rom_test}_{stamp}")
-        mmengine.mkdir_or_exist(state.rom_save_dir)
+        state.session_stamp = time.strftime("%Y%m%d_%H%M%S")  # e.g., 20250915_111404
+        state.session_root = os.path.join(root, state.session_stamp)
+        mmengine.mkdir_or_exist(state.session_root)
+
+    # 2) for every finalize, create a per-trial subfolder:
+    #    <session>/<test>_<HHMMSS>
+    trial_stamp = time.strftime("%H%M%S")  # e.g., 111404
+    trial_dir = os.path.join(state.session_root, f"{args.rom_test}_{trial_stamp}")
+    mmengine.mkdir_or_exist(trial_dir)
+    state.rom_save_dir = trial_dir
 
     result = {
         'test_name': args.rom_test,
