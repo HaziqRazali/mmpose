@@ -24,14 +24,6 @@ from collections import deque
 from utils_variables import rom_test
 from utils import set_kpt_preset, handle_hotkeys_for_presets
 
-# Voice utilities (new module)
-from utils_voice import (
-    VoiceController,
-    apply_voice_command,
-    add_voice_args,
-    init_voice_from_args,
-)
-
 # Optional 3D utilities; falls back to 2D angle if unavailable
 try:
     from utils_3d import extract_intrinsics_from_depth, compute_3d_skeletons, angle
@@ -44,6 +36,19 @@ except Exception:
             return np.nan
         cosang = np.clip(np.dot(va, vc) / (na * nc), -1.0, 1.0)
         return np.degrees(np.arccos(cosang))
+
+# =========================
+# Optional voice support
+# =========================
+import threading
+import queue
+import re
+
+try:
+    import azure.cognitiveservices.speech as speechsdk
+    _HAS_AZURE_SPEECH = True
+except (ImportError, ModuleNotFoundError):
+    _HAS_AZURE_SPEECH = False
 
 try:
     from mmdet.apis import inference_detector, init_detector
@@ -126,10 +131,6 @@ class SessionState:
         self.session_root = None          # e.g., "<output_root>/20250915_111404"
         self.session_stamp = None         # e.g., "20250915_111404"
 
-        # === RESULT WINDOW ===
-        self.result_window_name = None    # track & refresh the popup window
-
-
 # =========================
 # Sparkline (small angle strip)
 # =========================
@@ -200,8 +201,266 @@ def render_sparkline_strip(width, height, series, t_now, window_sec, label_text=
 
 
 # =========================
-# AUTO-ROM helpers
+# Voice mapping
 # =========================
+
+def _build_voice_aliases_from_rom(rom_test_dict):
+    """
+    Build VOICE_PRESET_ALIASES automatically from rom_test keys.
+    For each preset name (e.g., 'right_elbow_flexion'), generate:
+      - exact phrase:        r"\bright elbow flexion\b"
+      - flexible token path: r"\bright\b.*\belbow\b.*\bflexion\b"
+      - side+joint variants: r"\bright\b.*\belbow\b", r"\bright\b.*\belbow\b.*\bflexion\b"
+      - special cases:       'full_body' and '133'
+      - numeric alias:       'mode {i}' and '{i}' based on ordering
+    """
+    aliases = {}
+    preset_names = list(rom_test_dict.keys())
+
+    for i, name in enumerate(preset_names, start=1):
+        toks = name.split('_')
+        human = ' '.join(toks)
+        patterns = []
+
+        # exact "humanized" phrase
+        patterns.append(rf"\b{re.escape(human)}\b")
+
+        # flexible token order with gaps allowed (tokens in order)
+        patterns.append(r"\b" + r"\b.*\b".join(map(re.escape, toks)) + r"\b")
+
+        # side + joint (+ first action token) variants
+        if toks and toks[0] in ('left', 'right') and len(toks) >= 2:
+            side = toks[0]
+            joint = toks[1]
+            patterns.append(rf"\b{re.escape(side)}\b.*\b{re.escape(joint)}\b")
+            if len(toks) >= 3:
+                action = toks[2]
+                patterns.append(rf"\b{re.escape(side)}\b.*\b{re.escape(joint)}\b.*\b{re.escape(action)}\b")
+
+        # special presets
+        if name == 'full_body':
+            patterns.extend([
+                r"\bfull body\b", r"\bwhole body\b", r"\ball body\b", r"\bbody\b"
+            ])
+        if name == '133':
+            patterns.extend([
+                r"\b133\b", r"\bone thirty three\b", r"\bone three three\b"
+            ])
+
+        # numeric aliases (ordered by rom_test key order)
+        patterns.append(rf"\bmode {i}\b")
+        patterns.append(rf"\b{i}\b")
+
+        # de-dup while preserving order
+        seen = set()
+        dedup = []
+        for p in patterns:
+            if p not in seen:
+                seen.add(p)
+                dedup.append(p)
+
+        aliases[name] = dedup
+
+    return aliases
+
+VOICE_PRESET_ALIASES = _build_voice_aliases_from_rom(rom_test)
+
+VOICE_COMMAND_PATTERNS = {
+    "next": [r"\bnext\b", r"\bforward\b", r"\bgo next\b"],
+    "prev": [r"\bprevious\b", r"\bback\b", r"\bgo back\b"],
+    "zero": [r"\bzero\b", r"\brezero\b", r"\breset baseline\b", r"\bset baseline\b", r"\bcalibrate\b"],
+    "start": [r"\bstart\b", r"\bbegin\b", r"\bgo\b", r"\bstart test\b", r"\brecord\b"]
+}
+
+def _match_any(text: str, patterns):
+    for p in patterns:
+        if re.search(p, text):
+            return True
+    return False
+
+
+class VoiceController:
+    def __init__(self, subscription_key, region, device_name=None, language="en-US"):
+        self.enabled = _HAS_AZURE_SPEECH and bool(subscription_key) and bool(region)
+        self.q = queue.Queue()
+        self._thread = None
+        self._stop = threading.Event()
+        self._speech_config = None
+        self._audio_config = None
+        self._recognizer = None
+        self._device_name = device_name
+        self._language = language
+        self._subscription_key = subscription_key
+        self._region = region
+        self.last_heard = ""
+
+    def start(self):
+        if not self.enabled:
+            print("[VOICE] Azure Speech not available. Voice disabled.")
+            return
+        try:
+            self._speech_config = speechsdk.SpeechConfig(subscription=self._subscription_key, region=self._region)
+            self._speech_config.speech_recognition_language = self._language
+            self._speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceResponse_PostProcessingOption, "TrueText"
+            )
+            self._audio_config = speechsdk.audio.AudioConfig(device_name=self._device_name) if self._device_name else speechsdk.audio.AudioConfig()
+            self._recognizer = speechsdk.SpeechRecognizer(speech_config=self._speech_config, audio_config=self._audio_config)
+            self._recognizer.recognizing.connect(self._on_recognizing)
+            self._recognizer.recognized.connect(self._on_recognized)
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+            print("[VOICE] Listening… say commands like 'full body', 'right elbow', 'shoulder abduction', 'zero', 'start', 'next', 'previous'.")
+        except Exception as e:
+            print(f"[VOICE] Failed to init speech: {e}")
+            self.enabled = False
+
+    def _run_loop(self):
+        try:
+            self._recognizer.start_continuous_recognition()
+            while not self._stop.is_set():
+                time.sleep(0.05)
+        finally:
+            try:
+                self._recognizer.stop_continuous_recognition()
+            except Exception:
+                pass
+
+    def stop(self):
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+    def _on_recognizing(self, evt):
+        text = (evt.result.text or "").strip()
+        if text:
+            self.last_heard = text
+            print(f"[VOICE-INTERIM] {text}")
+
+    def _on_recognized(self, evt):
+        text = (evt.result.text or "").strip().lower()
+        if not text:
+            return
+        self.last_heard = text
+        print(f"[VOICE-FINAL] {text}")
+
+        for preset_name, patterns in VOICE_PRESET_ALIASES.items():
+            if _match_any(text, patterns):
+                self.q.put(('preset', preset_name)); return
+        if _match_any(text, VOICE_COMMAND_PATTERNS["start"]):
+            self.q.put(('start', None)); return
+        if _match_any(text, VOICE_COMMAND_PATTERNS["next"]):
+            self.q.put(('next', None)); return
+        if _match_any(text, VOICE_COMMAND_PATTERNS["prev"]):
+            self.q.put(('prev', None)); return
+        if _match_any(text, VOICE_COMMAND_PATTERNS["zero"]):
+            self.q.put(('zero', None)); return
+        if "elbow" in text:
+            self.q.put(('preset', "right_elbow_flexion")); return
+        if "shoulder" in text or "shoudler" in text:
+            self.q.put(('preset', "right_shoulder_abduction")); return
+        if "body" in text:
+            self.q.put(('preset', "full_body")); return
+
+    def poll(self):
+        try:
+            return self.q.get_nowait()
+        except queue.Empty:
+            return None
+
+
+# =========================
+# Core Processing
+# =========================
+
+def _apply_voice_command(args, state: SessionState, cmd_tuple):
+    if cmd_tuple is None:
+        return
+    cmd, arg = cmd_tuple
+
+    if cmd == 'preset':
+        if arg in rom_test:
+            set_kpt_preset(args, arg)
+            if state is not None:
+                # Arm auto-zero and reset baseline + ROM state
+                state.auto_zero_pending = True
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                state.baseline_deg = None
+                state.baseline_set_ts = None
+                state.last_angle = None
+                state.angle_series.clear()
+                _reset_auto_rom_state(state)
+                # this preset-triggered zero enables exactly ONE auto-arm after baseline
+                state.first_auto_arm_consumed = False
+                state.last_zero_source = 'auto'
+                print(f"[AUTO-ZERO] Armed for preset '{arg}'. Holding ~{state.auto_zero_window_sec:.1f}s before baseline lock.")
+        else:
+            print(f"[VOICE] Unknown preset: {arg}")
+
+    elif cmd == 'next':
+        set_kpt_preset(args, _cycle_for_voice(args.kpt_preset_name, +1))
+        if state is not None:
+            state.auto_zero_pending = True
+            state.auto_zero_start_time = None
+            state.auto_zero_buffer.clear()
+            state.baseline_deg = None
+            state.baseline_set_ts = None
+            state.last_angle = None
+            state.angle_series.clear()
+            _reset_auto_rom_state(state)
+            state.first_auto_arm_consumed = False
+            state.last_zero_source = 'auto'
+            print(f"[AUTO-ZERO] Armed for next preset '{args.rom_test}'.")
+
+    elif cmd == 'prev':
+        set_kpt_preset(args, _cycle_for_voice(args.kpt_preset_name, -1))
+        if state is not None:
+            state.auto_zero_pending = True
+            state.auto_zero_start_time = None
+            state.auto_zero_buffer.clear()
+            state.baseline_deg = None
+            state.baseline_set_ts = None
+            state.last_angle = None
+            state.angle_series.clear()
+            _reset_auto_rom_state(state)
+            state.first_auto_arm_consumed = False
+            state.last_zero_source = 'auto'
+            print(f"[AUTO-ZERO] Armed for previous preset '{args.rom_test}'.")
+
+    elif cmd == 'zero':
+        if np.isfinite(state.current_raw_angle):
+            state.baseline_deg = float(state.current_raw_angle)
+            state.baseline_set_ts = time.time()
+            state.angle_series.clear()
+            state.last_angle = None
+            state.auto_zero_pending = False
+            state.auto_zero_start_time = None
+            state.auto_zero_buffer.clear()
+            _reset_auto_rom_state(state, keep_trial_ready=False)
+            state.trial_armed = False               # manual zero does NOT auto-arm
+            state.first_auto_arm_consumed = True    # disable first auto-arm
+            state.last_zero_source = 'manual'
+            print(f"[VOICE] Baseline set to {state.baseline_deg:.2f}°")
+        else:
+            print("[VOICE] Cannot zero: no valid angle this frame.")
+
+    elif cmd == 'start':
+        if state.baseline_deg is None:
+            state.arm_after_baseline = True
+            print("[ROM] Start queued. Will arm as soon as baseline locks.")
+        else:
+            state.trial_armed = True
+            state.arm_after_baseline = False
+            state.first_auto_arm_consumed = True  # once you say start, we consume the auto-first semantics
+            print("[ROM] Armed for a single repetition. Move when ready.")
+
+
+def _cycle_for_voice(name: str, step: int) -> str:
+    preset_names = list(rom_test.keys())
+    i = preset_names.index(name) if name in preset_names else 0
+    return preset_names[(i + step) % len(preset_names)]
+
 
 def _reset_auto_rom_state(state: SessionState, keep_trial_ready=False):
     state.filt_angle = None
@@ -243,8 +502,12 @@ def _maybe_start_trial(args, state: SessionState, t_now):
     """Start trial only when armed (or auto-first right after baseline), moving, and amplitude away from baseline is large enough."""
     if state.trial_active or state.baseline_deg is None:
         return
+
+    # No auto re-arm on refractory expiry; only explicit arm, or first auto after baseline.
     if not state.trial_armed:
         return
+
+    # need sustained motion + amplitude gate
     amp_ok = abs(state.filt_angle or 0.0) >= args.rom_start_amp
     if amp_ok and state.moving_counter >= 5:  # ~5 consecutive frames above v_go
         state.trial_active = True
@@ -259,10 +522,13 @@ def _maybe_start_trial(args, state: SessionState, t_now):
 
 def _confirm_hold_and_lock_extremum(args, state: SessionState, t_now, frame_bgr):
     """If we have a stable hold window, lock a MIN or MAX depending on last movement sign."""
+    # Block repeated locks until we see new motion above v_go
     if state.after_lock_motion_needed and abs(state.vel_dps) < args.rom_v_go:
         return None
+
     if state.lock_refractory_until and t_now < state.lock_refractory_until:
         return None
+
     if not state.hold_window:
         return None
     t0 = state.hold_window[0][0]
@@ -337,139 +603,12 @@ def _update_best_pair_if_possible(args, state: SessionState):
             last_max = None
 
 
-# =========================
-# Result Panel helpers
-# =========================
-
-def _stack_h(images, gap=8, bg_color=(24, 24, 24)):
-    """Stack images horizontally with a gap; pad heights."""
-    imgs = [img.copy() for img in images if img is not None]
-    if not imgs:
-        return None
-    hmax = max(im.shape[0] for im in imgs)
-    padded = []
-    for im in imgs:
-        if im.shape[0] < hmax:
-            pad = np.full((hmax - im.shape[0], im.shape[1], 3), bg_color, dtype=np.uint8)
-            im = np.vstack([im, pad])
-        padded.append(im)
-    gaps = [np.full((hmax, gap, 3), bg_color, dtype=np.uint8) for _ in range(len(padded) - 1)]
-    out = []
-    for i, im in enumerate(padded):
-        out.append(im)
-        if i < len(gaps):
-            out.append(gaps[i])
-    return np.hstack(out)
-
-def _text(img, txt, org, scale=0.8, color=(255,255,255), thick=2):
-    cv2.putText(img, txt, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
-
-def _load_img(path, fallback_shape=None):
-    if path and os.path.isfile(path):
-        im = mmcv.imread(path)
-        if im is not None and im.ndim == 3:
-            return im
-    if fallback_shape is None:
-        fallback_shape = (360, 640, 3)
-    return np.full(fallback_shape, (40, 40, 40), dtype=np.uint8)
-
-def _compose_result_panel(test_name, status, session_stamp, trial_dir,
-                          min_path=None, min_deg=None,
-                          max_path=None, max_deg=None,
-                          rom_deg=None):
-    """Create a nice summary panel and return the BGR image."""
-    title_h = 64
-    footer_h = 32
-    pad = 16
-    card_w = 640
-    card_h = 360
-
-    # cards
-    min_img = _load_img(min_path, (card_h, card_w, 3))
-    max_img = _load_img(max_path, (card_h, card_w, 3))
-
-    # annotate per-card headings
-    min_card = min_img.copy()
-    max_card = max_img.copy()
-    _text(min_card, f"MIN: {('--.-' if min_deg is None else f'{min_deg:.1f}')}\u00b0", (12, 28), 0.9, (0,255,255), 2)
-    _text(max_card, f"MAX: {('--.-' if max_deg is None else f'{max_deg:.1f}')}\u00b0", (12, 28), 0.9, (0,255,255), 2)
-
-    row = _stack_h([min_card, max_card], gap=pad)
-
-    # canvas
-    W = row.shape[1]
-    H = title_h + row.shape[0] + footer_h + pad*2
-    panel = np.full((H, W, 3), (18, 18, 18), dtype=np.uint8)
-
-    # title
-    title = f"{test_name} — {status.upper()}"
-    _text(panel, title, (pad, int(title_h*0.7)), 1.2, (255,255,255), 2)
-
-    # place row
-    panel[title_h:title_h+row.shape[0], 0:W, :] = row
-
-    # footer
-    footer = f"ROM: {('--.-' if rom_deg is None else f'{rom_deg:.1f}')}\u00b0   |   session {session_stamp}   |   {os.path.basename(trial_dir)}"
-    _text(panel, footer, (pad, title_h + row.shape[0] + int(footer_h*0.8)), 0.7, (200,200,200), 2)
-
-    return panel
-
-def _show_and_save_result_panel(args, state: SessionState, result: dict):
-    """Save ROM_PANEL.png and optionally pop a window."""
-    test_name = result.get('test_name', args.rom_test)
-    status = result.get('status', 'ok')
-    session_stamp = state.session_stamp or time.strftime("%Y%m%d_%H%M%S")
-    trial_dir = state.rom_save_dir or os.path.join(args.output_root or ".", "unknown_trial")
-
-    min_path = result.get('min_image', None)
-    max_path = result.get('max_image', None)
-    min_deg = result.get('min_deg', None)
-    max_deg = result.get('max_deg', None)
-    rom_deg = result.get('rom_deg', None)
-
-    panel = _compose_result_panel(
-        test_name=test_name,
-        status=status,
-        session_stamp=session_stamp,
-        trial_dir=trial_dir,
-        min_path=min_path,
-        min_deg=min_deg,
-        max_path=max_path,
-        max_deg=max_deg,
-        rom_deg=rom_deg
-    )
-
-    # Save panel
-    panel_path = os.path.join(trial_dir, "ROM_PANEL.png")
-    mmcv.imwrite(panel, panel_path)
-    print(f"[ROM] Panel saved: {panel_path}")
-
-    # Optional popup
-    if args.show and getattr(args, 'show_result', False):
-        if state.result_window_name:
-            try:
-                cv2.destroyWindow(state.result_window_name)
-            except Exception:
-                pass
-        win = f"ROM Result — {test_name}"
-        state.result_window_name = win
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-        target_w = min(1280, panel.shape[1])
-        scale = target_w / float(panel.shape[1])
-        target_h = int(panel.shape[0] * scale)
-        cv2.resizeWindow(win, target_w, target_h)
-        cv2.imshow(win, panel)
-
-
 def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr=None):
     """Finalize when the patient returns & holds near baseline, or on timeout.
     combined_bgr: If provided, saved images will include the HUD/sparkline.
-
-    RETURNS:
-      dict | None  (result summary if a finalize happened this call)
     """
     if not state.trial_active:
-        return None
+        return
 
     # baseline return check
     near_base = (state.filt_angle is not None) and (abs(state.filt_angle) <= args.rom_baseline_tol) and (abs(state.vel_dps) < args.rom_v_stop)
@@ -488,17 +627,23 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr
         timeout = True
 
     if not (baseline_back or timeout):
-        return None
+        return
 
     # Prepare folder
+    # -------------------------
+    # SESSION/TRIAL FOLDER SETUP
+    # -------------------------
+    # 1) ensure a single session folder per run (first finalize defines it)
     if state.session_root is None:
         root = args.output_root if args.output_root else "."
         mmengine.mkdir_or_exist(root)
-        state.session_stamp = time.strftime("%Y%m%d_%H%M%S")
+        state.session_stamp = time.strftime("%Y%m%d_%H%M%S")  # e.g., 20250915_111404
         state.session_root = os.path.join(root, state.session_stamp)
         mmengine.mkdir_or_exist(state.session_root)
 
-    trial_stamp = time.strftime("%H%M%S")
+    # 2) for every finalize, create a per-trial subfolder:
+    #    <session>/<test>_<HHMMSS>
+    trial_stamp = time.strftime("%H%M%S")  # e.g., 111404
     trial_dir = os.path.join(state.session_root, f"{args.rom_test}_{trial_stamp}")
     mmengine.mkdir_or_exist(trial_dir)
     state.rom_save_dir = trial_dir
@@ -526,11 +671,13 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr
         last_max = next((e for e in reversed(state.extrema_events) if e['kind'] == 'max'), None)
 
         if last_min and (not last_max):
+            # Do NOT attach a frame here; let fallback fill with HUD later
             baseline_evt = {'kind': 'max', 'ts': t_now, 'angle': 0.0, 'frame': None}
             rom_val = baseline_evt['angle'] - last_min['angle']
             if rom_val >= args.rom_min_amplitude:
                 state.best_pair = {'min': last_min, 'max': baseline_evt, 'rom': rom_val}
         elif last_max and (not last_min):
+            # Do NOT attach a frame here; let fallback fill with HUD later
             baseline_evt = {'kind': 'min', 'ts': t_now, 'angle': 0.0, 'frame': None}
             rom_val = last_max['angle'] - baseline_evt['angle']
             if rom_val >= args.rom_min_amplitude:
@@ -603,16 +750,6 @@ def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr
     # stay DISARMED after finalize; no auto re-arm
     state.trial_armed = False
     state.trial_refractory_until = t_now + args.rom_refractory_sec
-
-    # Compose/save/show result panel
-    _show_and_save_result_panel(args, state, result)
-
-    return result
-
-
-# =========================
-# Main per-frame processing
-# =========================
 
 def process_one_image(args,
                       color_img,
@@ -772,10 +909,12 @@ def process_one_image(args,
                         state.last_angle = None
                         _reset_auto_rom_state(state, keep_trial_ready=False)
                         # --- ARMING RULES ---
+                        # 1) If user said "start" earlier, arm now.
                         if state.arm_after_baseline:
                             state.trial_armed = True
                             state.arm_after_baseline = False
                             state.first_auto_arm_consumed = True
+                        # 2) Else if this baseline came from preset/auto AND auto-first not yet consumed, arm once.
                         elif (state.last_zero_source == 'auto') and (not state.first_auto_arm_consumed):
                             state.trial_armed = True
                             state.first_auto_arm_consumed = True
@@ -876,6 +1015,7 @@ def process_one_image(args,
         cv2.putText(frame_bgr, f"ROM: {args.rom_test} (no angle)", (10, 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 240, 240), 2, cv2.LINE_AA)
 
+    zero_text = "Zeroed" if state.baseline_deg is not None else "Unzeroed"
     arm_text = "Active" if state.trial_active else ("Armed" if state.trial_armed else "Disarmed")
     cv2.putText(frame_bgr, f"Test: {args.rom_test} | "
                         f"{'Zeroed' if state.baseline_deg is not None else 'Unzeroed'} | "
@@ -914,7 +1054,7 @@ def process_one_image(args,
             cmd = voice.poll()
             if cmd is None:
                 break
-            apply_voice_command(args, state, cmd, reset_auto_rom_state=_reset_auto_rom_state)
+            _apply_voice_command(args, state, cmd)
 
     if args.show:
         cv2.imshow("Pose", combined_bgr)
@@ -962,7 +1102,6 @@ def process_one_image(args,
 
     return data_samples.get('pred_instances', None), key, combined_bgr
 
-
 def mouse_callback(event, x, y, flags, param):
     if event == cv2.EVENT_MOUSEMOVE:
         depth = param.get_distance(x, y)
@@ -977,8 +1116,6 @@ def main():
     parser.add_argument('pose_checkpoint')
     parser.add_argument('--input', type=str, default='')
     parser.add_argument('--show', action='store_true', default=False)
-    parser.add_argument('--show-result', action='store_true', default=False,
-                        help='Pop a separate result window and save ROM_PANEL.png on finalize (requires --show).')
     parser.add_argument('--output-root', type=str, default='')
     parser.add_argument('--save-predictions', action='store_true', default=False)
     parser.add_argument('--device', default='cuda:0')
@@ -1003,8 +1140,12 @@ def main():
     parser.add_argument('--plot-height', type=int, default=80)
     parser.add_argument('--plot-gap-sec', type=float, default=0.4)
 
-    # Voice (moved to utils_voice)
-    add_voice_args(parser)
+    # Voice
+    parser.add_argument('--voice', action='store_true', help='Enable voice control via Azure Speech SDK')
+    parser.add_argument('--voice-key', type=str, default=os.environ.get("AZURE_SPEECH_KEY", ""))
+    parser.add_argument('--voice-region', type=str, default=os.environ.get("AZURE_SPEECH_REGION", ""))
+    parser.add_argument('--voice-mic', type=str, default="plughw:CARD=PCH,DEV=0")
+    parser.add_argument('--voice-lang', type=str, default='en-US')
 
     # AUTO-ROM
     parser.add_argument('--auto-rom', action='store_true', help='Auto-detect min/max/ROM, save images + JSON')
@@ -1063,8 +1204,16 @@ def main():
 
     state = SessionState()
 
-    # Start voice (optional, via utils_voice)
-    voice = init_voice_from_args(args)
+    # Start voice (optional)
+    voice = None
+    if args.voice:
+        voice = VoiceController(
+            subscription_key=args.voice_key,
+            region=args.voice_region,
+            device_name=args.voice_mic,
+            language=args.voice_lang
+        )
+        voice.start()
 
     # Determine input type
     if args.input == 'webcam':
