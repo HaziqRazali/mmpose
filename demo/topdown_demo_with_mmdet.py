@@ -1,30 +1,42 @@
-# Copyright (c) OpenMMLab. All rights reserved.
-import logging
-import mimetypes
+# topdown_demo_with_mmdet.py
+# End-to-end demo with:
+# - Detector (mmdet) -> per-person bboxes
+# - Top-down pose estimation (mmpose)
+# - ROM auto-baseline (auto-zero) + auto-ROM min/max pairing
+# - HUD as separate strips (text + optional sparkline) under the video
+# - Voice control (Azure Speech) for presets / start / zero / next / prev
+#
+# Layout:
+#   [ video frame ]
+#   [ text strip: Angle/ROM + Test | Zeroed | Armed (+ auto-zero status) ]
+#   [ sparkline (if --plot-seconds > 0) ]
+
 import os
 import time
-from argparse import ArgumentParser
-
+import logging
+import mimetypes
 import cv2
 import json_tricks as json
 import mmcv
 import mmengine
 import numpy as np
-from mmengine.logging import print_log
 
+from argparse import ArgumentParser
+from collections import deque
+
+from mmengine.logging import print_log
 from mmpose.apis import inference_topdown
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.evaluation.functional import nms
 from mmpose.registry import VISUALIZERS
 from mmpose.structures import merge_data_samples, split_instances
 from mmpose.utils import adapt_mmdet_pipeline
-
-from collections import deque
+from mmdet.apis import inference_detector, init_detector
 
 from utils_variables import rom_test
 from utils import set_kpt_preset, handle_hotkeys_for_presets
 
-# Voice utilities (new module)
+# Voice utilities
 from utils_voice import (
     VoiceController,
     apply_voice_command,
@@ -32,24 +44,23 @@ from utils_voice import (
     init_voice_from_args,
 )
 
-# Optional 3D utilities; falls back to 2D angle if unavailable
-try:
-    from utils_3d import extract_intrinsics_from_depth, compute_3d_skeletons, angle
-except Exception:
-    def angle(a, b, c):
-        a = np.array(a, dtype=float); b = np.array(b, dtype=float); c = np.array(c, dtype=float)
-        va = a - b; vc = c - b
-        na = np.linalg.norm(va); nc = np.linalg.norm(vc)
-        if na < 1e-6 or nc < 1e-6:
-            return np.nan
-        cosang = np.clip(np.dot(va, vc) / (na * nc), -1.0, 1.0)
-        return np.degrees(np.arccos(cosang))
+# ROM mechanics
+from utils_rom import (
+    SessionState,
+    reset_auto_rom_state,
+    maybe_start_trial,
+    confirm_hold_and_lock_extremum,
+    attach_locked_frame_if_pending,
+)
 
-try:
-    from mmdet.apis import inference_detector, init_detector
-    has_mmdet = True
-except (ImportError, ModuleNotFoundError):
-    has_mmdet = False
+# 3D utilities
+from utils_3d import extract_intrinsics_from_depth, compute_3d_skeletons, angle
+
+# Visualization HUD
+from utils_visualization import render_sparkline_strip, render_text_strip
+
+# Finalization (persistence + panel)
+from utils_results import finalize_rom_trial
 
 try:
     import pyrealsense2 as rs
@@ -58,610 +69,69 @@ except (ImportError, ModuleNotFoundError):
 
 
 # =========================
-# Session State
-# =========================
-
-class SessionState:
-    def __init__(self):
-        self.last_angle = None
-        self.angle_series = deque()
-        self.active_rom = None
-        self.baseline_deg = None          # baseline offset (None = unzeroed)
-        self.baseline_set_ts = None       # when baseline locked
-        self.current_raw_angle = np.nan   # latest raw angle each frame
-
-        # === AUTO-ZERO ===========================================
-        self.auto_zero_pending = False
-        self.auto_zero_start_time = None
-        self.auto_zero_window_sec = 1.0
-        self.auto_zero_buffer = []
-        self.auto_zero_min_samples = 10
-        self.auto_zero_max_std_deg = 999
-        self.last_zero_source = None      # 'auto' (from preset) | 'manual'
-        # ==========================================================
-
-        # === AUTO-ROM ============================================
-        # Filtering / velocity
-        self.filt_angle = None
-        self.prev_filt_angle = None
-        self.prev_ts = None
-        self.vel_dps = 0.0
-
-        # Hold detection
-        self.hold_window = deque()        # (ts, filt_angle)
-        self.stopped_since_ts = None
-        self.moving_counter = 0
-        self.stopped_counter = 0
-        self.last_move_sign = 0           # -1 / 0 / +1
-
-        # Trial / segment lifecycle
-        self.trial_active = False
-        self.trial_start_ts = None
-        self.trial_armed = False
-        self.trial_refractory_until = None
-
-        # One-shot start control
-        self.arm_after_baseline = False   # queue start if said before baseline locked
-        self.first_auto_arm_consumed = True  # set to False on baseline lock from preset
-
-        # Baseline return / finalize gating
-        self.baseline_hold_start_ts = None
-
-        # Extrema tracking
-        self.extrema_events = []          # {'kind':'min'|'max','ts':..,'angle':..,'frame':np.ndarray}
-        self.pending_capture_kind = None  # 'min'|'max' to capture after render
-        self.best_pair = None             # {'min':event,'max':event,'rom':float}
-
-        # Locks/latches
-        self.lock_refractory_until = None
-        self.after_lock_motion_needed = False
-        self.last_locked_kind = None
-        self.last_locked_ts = None
-
-        # Output
-        self.no_motion_reported = False
-        self.rom_save_dir = None
-
-        # === SESSION-LEVEL OUTPUT ROOT ===
-        self.session_root = None          # e.g., "<output_root>/20250915_111404"
-        self.session_stamp = None         # e.g., "20250915_111404"
-
-        # === RESULT WINDOW ===
-        self.result_window_name = None    # track & refresh the popup window
-
-
-# =========================
-# Sparkline (small angle strip)
-# =========================
-
-def render_sparkline_strip(width, height, series, t_now, window_sec, label_text=None, gap_sec=0.4):
-    strip = np.zeros((height, width, 3), dtype=np.uint8)
-
-    if window_sec <= 0 or len(series) < 2:
-        if label_text:
-            cv2.putText(strip, label_text, (10, int(0.65 * height)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
-        return strip
-
-    t0 = t_now - float(window_sec)
-    filtered = [(max(t0, t), a) for (t, a) in series if (t >= t0 and np.isfinite(a))]
-    if len(filtered) < 2:
-        if label_text:
-            cv2.putText(strip, label_text, (10, int(0.65 * height)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
-        return strip
-
-    ts = [t for (t, _) in filtered]
-    ys = [a for (_, a) in filtered]
-
-    y_min, y_max = float(np.min(ys)), float(np.max(ys))
-    if not np.isfinite(y_min) or not np.isfinite(y_max) or abs(y_max - y_min) < 1e-9:
-        y_min, y_max = (0.0, 1.0) if not np.isfinite(y_min) or not np.isfinite(y_max) else (y_min - 1.0, y_max + 1.0)
-
-    cv2.rectangle(strip, (0, 0), (width - 1, height - 1), (32, 32, 32), thickness=-1)
-    cv2.rectangle(strip, (0, 0), (width - 1, height - 1), (180, 180, 180), thickness=1)
-
-    def map_x(t):
-        tx = (t - t0) / max(window_sec, 1e-6)
-        tx = 0.0 if not np.isfinite(tx) else min(max(tx, 0.0), 1.0)
-        return int(round(tx * (width - 1)))
-
-    def map_y(y):
-        ty = (y - y_min) / max((y_max - y_min), 1e-6)
-        ty = 0.0 if not np.isfinite(ty) else min(max(ty, 0.0), 1.0)
-        return int(round((height - 1) - ty * (height - 1)))
-
-    segments = []
-    seg = [(map_x(ts[0]), map_y(ys[0]))]
-    for i in range(1, len(ts)):
-        if (ts[i] - ts[i - 1]) > gap_sec:
-            if len(seg) >= 2:
-                segments.append(np.array(seg, dtype=np.int32))
-            seg = []
-        seg.append((map_x(ts[i]), map_y(ys[i])))
-    if len(seg) >= 2:
-        segments.append(np.array(seg, dtype=np.int32))
-
-    for poly in segments:
-        cv2.polylines(strip, [poly], isClosed=False, color=(0, 255, 0), thickness=2, lineType=cv2.LINE_AA)
-
-    cv2.putText(strip, f"[{y_min:.1f}, {y_max:.1f}]", (10, height - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    last_y = ys[-1]
-    if np.isfinite(last_y):
-        cv2.putText(strip, f"{last_y:.1f} deg", (10, 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-    if label_text:
-        txt_w = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)[0][0]
-        cv2.putText(strip, label_text, (width - txt_w - 10, 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
-
-    return strip
-
-
-# =========================
-# AUTO-ROM helpers
-# =========================
-
-def _reset_auto_rom_state(state: SessionState, keep_trial_ready=False):
-    state.filt_angle = None
-    state.prev_filt_angle = None
-    state.prev_ts = None
-    state.vel_dps = 0.0
-
-    state.hold_window.clear()
-    state.stopped_since_ts = None
-    state.moving_counter = 0
-    state.stopped_counter = 0
-    state.last_move_sign = 0
-
-    # lifecycle
-    state.trial_active = False if not keep_trial_ready else state.trial_active
-    state.trial_start_ts = None if not keep_trial_ready else state.trial_start_ts
-    state.trial_armed = False
-    state.trial_refractory_until = None
-
-    # finalize gating
-    state.baseline_hold_start_ts = None
-
-    # extrema
-    state.extrema_events = []
-    state.pending_capture_kind = None
-    state.best_pair = None
-
-    # locks/latches
-    state.lock_refractory_until = None
-    state.after_lock_motion_needed = False
-    state.last_locked_kind = None
-    state.last_locked_ts = None
-
-    state.no_motion_reported = False
-    # keep rom_save_dir for the run
-
-
-def _maybe_start_trial(args, state: SessionState, t_now):
-    """Start trial only when armed (or auto-first right after baseline), moving, and amplitude away from baseline is large enough."""
-    if state.trial_active or state.baseline_deg is None:
-        return
-    if not state.trial_armed:
-        return
-    amp_ok = abs(state.filt_angle or 0.0) >= args.rom_start_amp
-    if amp_ok and state.moving_counter >= 5:  # ~5 consecutive frames above v_go
-        state.trial_active = True
-        state.trial_start_ts = t_now
-        state.extrema_events = []
-        state.best_pair = None
-        state.no_motion_reported = False
-        state.baseline_hold_start_ts = None
-        state.trial_armed = False  # consume the arm (single rep)
-        print("[ROM] Trial started.")
-
-
-def _confirm_hold_and_lock_extremum(args, state: SessionState, t_now, frame_bgr):
-    """If we have a stable hold window, lock a MIN or MAX depending on last movement sign."""
-    if state.after_lock_motion_needed and abs(state.vel_dps) < args.rom_v_go:
-        return None
-    if state.lock_refractory_until and t_now < state.lock_refractory_until:
-        return None
-    if not state.hold_window:
-        return None
-    t0 = state.hold_window[0][0]
-    if (t_now - t0) < args.rom_hold_sec:
-        return None
-
-    vals = np.array([y for (_, y) in state.hold_window], dtype=float)
-    vals = vals[np.isfinite(vals)]
-    if vals.size < max(5, int(0.3/0.033)):
-        return None
-    if np.nanstd(vals) > args.rom_std_max:
-        return None
-
-    ang_med = float(np.nanmedian(vals))
-    if state.last_move_sign > 0:
-        kind = 'max'
-    elif state.last_move_sign < 0:
-        kind = 'min'
-    else:
-        return None
-
-    # de-dup same-kind locks within a short window if angle barely changed
-    if state.last_locked_kind == kind and state.last_locked_ts and (t_now - state.last_locked_ts < 1.2):
-        if state.extrema_events:
-            prev = state.extrema_events[-1]
-            if prev['kind'] == kind and abs(ang_med - prev['angle']) < 3.0:
-                return None
-
-    evt = {'kind': kind, 'ts': t_now, 'angle': ang_med, 'frame': None}
-    state.extrema_events.append(evt)
-    state.pending_capture_kind = kind
-
-    cv2.putText(frame_bgr, f"{kind.upper()} locked: {ang_med:.1f} deg", (10, 78),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2, cv2.LINE_AA)
-    state.hold_window.clear()
-    state.lock_refractory_until = t_now + args.rom_lock_refractory_sec
-
-    # require fresh motion before allowing another lock
-    state.after_lock_motion_needed = True
-    state.last_locked_kind = kind
-    state.last_locked_ts = t_now
-
-    print(f"[ROM] {kind.upper()} locked at {ang_med:.2f}°")
-
-    _update_best_pair_if_possible(args, state)
-    return evt
-
-
-def _update_best_pair_if_possible(args, state: SessionState):
-    best = state.best_pair
-    last_min = None
-    last_max = None
-    for evt in state.extrema_events:
-        if evt['kind'] == 'min':
-            last_min = evt
-        elif evt['kind'] == 'max':
-            last_max = evt
-        if last_min is not None and last_max is not None:
-            ang_min = last_min['angle']
-            ang_max = last_max['angle']
-            rom = ang_max - ang_min
-            if rom < 0:
-                ang_min, ang_max = ang_max, ang_min
-                last_min, last_max = last_max, last_min
-                rom = ang_max - ang_min
-
-            if rom >= args.rom_min_amplitude:
-                if (best is None) or (rom > best['rom']):
-                    state.best_pair = best = {'min': last_min, 'max': last_max, 'rom': rom}
-
-            last_min = None
-            last_max = None
-
-
-# =========================
-# Result Panel helpers
-# =========================
-
-def _stack_h(images, gap=8, bg_color=(24, 24, 24)):
-    """Stack images horizontally with a gap; pad heights."""
-    imgs = [img.copy() for img in images if img is not None]
-    if not imgs:
-        return None
-    hmax = max(im.shape[0] for im in imgs)
-    padded = []
-    for im in imgs:
-        if im.shape[0] < hmax:
-            pad = np.full((hmax - im.shape[0], im.shape[1], 3), bg_color, dtype=np.uint8)
-            im = np.vstack([im, pad])
-        padded.append(im)
-    gaps = [np.full((hmax, gap, 3), bg_color, dtype=np.uint8) for _ in range(len(padded) - 1)]
-    out = []
-    for i, im in enumerate(padded):
-        out.append(im)
-        if i < len(gaps):
-            out.append(gaps[i])
-    return np.hstack(out)
-
-def _text(img, txt, org, scale=0.8, color=(255,255,255), thick=2):
-    cv2.putText(img, txt, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
-
-def _load_img(path, fallback_shape=None):
-    if path and os.path.isfile(path):
-        im = mmcv.imread(path)
-        if im is not None and im.ndim == 3:
-            return im
-    if fallback_shape is None:
-        fallback_shape = (360, 640, 3)
-    return np.full(fallback_shape, (40, 40, 40), dtype=np.uint8)
-
-def _compose_result_panel(test_name, status, session_stamp, trial_dir,
-                          min_path=None, min_deg=None,
-                          max_path=None, max_deg=None,
-                          rom_deg=None):
-    """Create a nice summary panel and return the BGR image."""
-    title_h = 64
-    footer_h = 32
-    pad = 16
-    card_w = 640
-    card_h = 360
-
-    # cards
-    min_img = _load_img(min_path, (card_h, card_w, 3))
-    max_img = _load_img(max_path, (card_h, card_w, 3))
-
-    # annotate per-card headings
-    min_card = min_img.copy()
-    max_card = max_img.copy()
-    _text(min_card, f"MIN: {('--.-' if min_deg is None else f'{min_deg:.1f}')}\u00b0", (12, 28), 0.9, (0,255,255), 2)
-    _text(max_card, f"MAX: {('--.-' if max_deg is None else f'{max_deg:.1f}')}\u00b0", (12, 28), 0.9, (0,255,255), 2)
-
-    row = _stack_h([min_card, max_card], gap=pad)
-
-    # canvas
-    W = row.shape[1]
-    H = title_h + row.shape[0] + footer_h + pad*2
-    panel = np.full((H, W, 3), (18, 18, 18), dtype=np.uint8)
-
-    # title
-    title = f"{test_name} — {status.upper()}"
-    _text(panel, title, (pad, int(title_h*0.7)), 1.2, (255,255,255), 2)
-
-    # place row
-    panel[title_h:title_h+row.shape[0], 0:W, :] = row
-
-    # footer
-    footer = f"ROM: {('--.-' if rom_deg is None else f'{rom_deg:.1f}')}\u00b0   |   session {session_stamp}   |   {os.path.basename(trial_dir)}"
-    _text(panel, footer, (pad, title_h + row.shape[0] + int(footer_h*0.8)), 0.7, (200,200,200), 2)
-
-    return panel
-
-def _show_and_save_result_panel(args, state: SessionState, result: dict):
-    """Save ROM_PANEL.png and optionally pop a window."""
-    test_name = result.get('test_name', args.rom_test)
-    status = result.get('status', 'ok')
-    session_stamp = state.session_stamp or time.strftime("%Y%m%d_%H%M%S")
-    trial_dir = state.rom_save_dir or os.path.join(args.output_root or ".", "unknown_trial")
-
-    min_path = result.get('min_image', None)
-    max_path = result.get('max_image', None)
-    min_deg = result.get('min_deg', None)
-    max_deg = result.get('max_deg', None)
-    rom_deg = result.get('rom_deg', None)
-
-    panel = _compose_result_panel(
-        test_name=test_name,
-        status=status,
-        session_stamp=session_stamp,
-        trial_dir=trial_dir,
-        min_path=min_path,
-        min_deg=min_deg,
-        max_path=max_path,
-        max_deg=max_deg,
-        rom_deg=rom_deg
-    )
-
-    # Save panel
-    panel_path = os.path.join(trial_dir, "ROM_PANEL.png")
-    mmcv.imwrite(panel, panel_path)
-    print(f"[ROM] Panel saved: {panel_path}")
-
-    # Optional popup
-    if args.show and getattr(args, 'show_result', False):
-        if state.result_window_name:
-            try:
-                cv2.destroyWindow(state.result_window_name)
-            except Exception:
-                pass
-        win = f"ROM Result — {test_name}"
-        state.result_window_name = win
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-        target_w = min(1280, panel.shape[1])
-        scale = target_w / float(panel.shape[1])
-        target_h = int(panel.shape[0] * scale)
-        cv2.resizeWindow(win, target_w, target_h)
-        cv2.imshow(win, panel)
-
-
-def _finalize_if_ready(args, state: SessionState, t_now, frame_bgr, combined_bgr=None):
-    """Finalize when the patient returns & holds near baseline, or on timeout.
-    combined_bgr: If provided, saved images will include the HUD/sparkline.
-
-    RETURNS:
-      dict | None  (result summary if a finalize happened this call)
-    """
-    if not state.trial_active:
-        return None
-
-    # baseline return check
-    near_base = (state.filt_angle is not None) and (abs(state.filt_angle) <= args.rom_baseline_tol) and (abs(state.vel_dps) < args.rom_v_stop)
-    baseline_back = False
-    if near_base:
-        if state.baseline_hold_start_ts is None:
-            state.baseline_hold_start_ts = t_now
-        elif (t_now - state.baseline_hold_start_ts) >= args.rom_baseline_hold_sec:
-            baseline_back = True
-    else:
-        state.baseline_hold_start_ts = None
-
-    # timeout from trial start (patient never returns)
-    timeout = False
-    if state.trial_start_ts and (t_now - state.trial_start_ts >= args.rom_timeout_sec):
-        timeout = True
-
-    if not (baseline_back or timeout):
-        return None
-
-    # Prepare folder
-    if state.session_root is None:
-        root = args.output_root if args.output_root else "."
-        mmengine.mkdir_or_exist(root)
-        state.session_stamp = time.strftime("%Y%m%d_%H%M%S")
-        state.session_root = os.path.join(root, state.session_stamp)
-        mmengine.mkdir_or_exist(state.session_root)
-
-    trial_stamp = time.strftime("%H%M%S")
-    trial_dir = os.path.join(state.session_root, f"{args.rom_test}_{trial_stamp}")
-    mmengine.mkdir_or_exist(trial_dir)
-    state.rom_save_dir = trial_dir
-
-    result = {
-        'test_name': args.rom_test,
-        'baseline_deg': state.baseline_deg,
-        'kpt_thr': args.kpt_thr,
-        'hold_sec': args.rom_hold_sec,
-        'std_max': args.rom_std_max,
-        'v_go': args.rom_v_go,
-        'v_stop': args.rom_v_stop,
-        'start_amp': args.rom_start_amp,
-        'baseline_tol': args.rom_baseline_tol,
-        'baseline_hold_sec': args.rom_baseline_hold_sec,
-        'min_amplitude': args.rom_min_amplitude,
-        'timeout_sec': args.rom_timeout_sec,
-        'events': [{'kind': e['kind'], 'ts': e['ts'], 'angle': e['angle']} for e in state.extrema_events],
-        'status': 'ok',
-    }
-
-    # Synthesize missing mate at baseline if needed
-    if state.best_pair is None and baseline_back:
-        last_min = next((e for e in reversed(state.extrema_events) if e['kind'] == 'min'), None)
-        last_max = next((e for e in reversed(state.extrema_events) if e['kind'] == 'max'), None)
-
-        if last_min and (not last_max):
-            baseline_evt = {'kind': 'max', 'ts': t_now, 'angle': 0.0, 'frame': None}
-            rom_val = baseline_evt['angle'] - last_min['angle']
-            if rom_val >= args.rom_min_amplitude:
-                state.best_pair = {'min': last_min, 'max': baseline_evt, 'rom': rom_val}
-        elif last_max and (not last_min):
-            baseline_evt = {'kind': 'min', 'ts': t_now, 'angle': 0.0, 'frame': None}
-            rom_val = last_max['angle'] - baseline_evt['angle']
-            if rom_val >= args.rom_min_amplitude:
-                state.best_pair = {'min': baseline_evt, 'max': last_max, 'rom': rom_val}
-
-    if state.best_pair is None:
-        # If nothing valid, decide status
-        if len(state.extrema_events) == 0:
-            result['status'] = 'no_motion'
-            result['min_deg'] = state.baseline_deg
-            result['max_deg'] = state.baseline_deg
-            result['rom_deg'] = 0.0
-            img_path = os.path.join(state.rom_save_dir, f"BASELINE_{state.baseline_deg if state.baseline_deg is not None else 0.0:.1f}deg.png")
-            mmcv.imwrite((combined_bgr if combined_bgr is not None else frame_bgr), img_path)
-            result['baseline_image'] = img_path
-            print("[ROM] No movement detected; saved baseline image.")
-        else:
-            result['status'] = 'insufficient_range'
-            result['min_deg'] = None
-            result['max_deg'] = None
-            result['rom_deg'] = 0.0
-            print("[ROM] Finalized without a valid min/max pair (insufficient range).")
-    else:
-        best = state.best_pair
-        min_evt = best['min']
-        max_evt = best['max']
-        rom_val = best['rom']
-
-        # Use HUD frame if available
-        hud_src = combined_bgr if combined_bgr is not None else frame_bgr
-        if min_evt.get('frame') is None:
-            min_evt['frame'] = hud_src.copy()
-        if max_evt.get('frame') is None:
-            max_evt['frame'] = hud_src.copy()
-
-        min_img_path = os.path.join(state.rom_save_dir, f"MIN_{min_evt['angle']:.1f}deg.png")
-        max_img_path = os.path.join(state.rom_save_dir, f"MAX_{max_evt['angle']:.1f}deg.png")
-        mmcv.imwrite(min_evt['frame'], min_img_path)
-        mmcv.imwrite(max_evt['frame'], max_img_path)
-
-        result.update({
-            'min_deg': float(min_evt['angle']),
-            'min_ts': float(min_evt['ts']),
-            'min_image': min_img_path,
-            'max_deg': float(max_evt['angle']),
-            'max_ts': float(max_evt['ts']),
-            'max_image': max_img_path,
-            'rom_deg': float(rom_val),
-        })
-
-        cv2.putText(frame_bgr, f"ROM saved: {rom_val:.1f} deg", (10, 104),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
-        print(f"[ROM] Saved MIN {min_evt['angle']:.2f}°, MAX {max_evt['angle']:.2f}°, ROM {rom_val:.2f}°")
-
-    json_path = os.path.join(state.rom_save_dir, "rom_summary.json")
-    with open(json_path, 'w') as f:
-        json.dump(result, f, indent=2)
-    print(f"[ROM] Summary saved: {json_path}")
-
-    # finalize lifecycle
-    state.trial_active = False
-    state.trial_start_ts = None
-    state.extrema_events = []
-    state.best_pair = None
-    state.pending_capture_kind = None
-    state.no_motion_reported = (result['status'] == 'no_motion')
-    state.baseline_hold_start_ts = None
-    state.lock_refractory_until = None
-
-    # stay DISARMED after finalize; no auto re-arm
-    state.trial_armed = False
-    state.trial_refractory_until = t_now + args.rom_refractory_sec
-
-    # Compose/save/show result panel
-    _show_and_save_result_panel(args, state, result)
-
-    return result
-
-
-# =========================
 # Main per-frame processing
 # =========================
 
-def process_one_image(args,
-                      color_img,
-                      depth_img,
-                      detector,
-                      pose_estimator,
-                      visualizer=None,
-                      show_interval=0,
-                      state=None,
-                      voice: VoiceController = None):
+def process_one_image(
+    args,
+    color_img,
+    depth_img,
+    detector,
+    pose_estimator,
+    visualizer=None,
+    show_interval=0,
+    state: SessionState = None,
+    voice: VoiceController = None,
+):
+    """Run one frame: detect -> pose -> angle/ROM -> HUD -> finalize/save (if due)."""
 
+    # 1) Detector
     det_result = inference_detector(detector, color_img)
     pred_instance = det_result.pred_instances.cpu().numpy()
     bboxes = np.concatenate((pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
-    bboxes = bboxes[np.logical_and(pred_instance.labels == args.det_cat_id,
-                                   pred_instance.scores > args.bbox_thr)]
+    bboxes = bboxes[
+        np.logical_and(pred_instance.labels == args.det_cat_id, pred_instance.scores > args.bbox_thr)
+    ]
     bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
 
+    # 2) Pose
     pose_results = inference_topdown(pose_estimator, color_img, bboxes)
     data_samples = merge_data_samples(pose_results)
 
+    # Visualizer expects RGB image
     if isinstance(color_img, str):
-        color_img = mmcv.imread(color_img, channel_order='rgb')
+        color_img_rgb = mmcv.imread(color_img, channel_order="rgb")
     elif isinstance(color_img, np.ndarray):
-        color_img = mmcv.bgr2rgb(color_img)
+        color_img_rgb = mmcv.bgr2rgb(color_img)
+    else:
+        raise TypeError("Unsupported color_img type.")
 
-    # Reset state if preset changed
+    # Initialize / react to preset changes
     if state is not None:
         if state.active_rom is None:
             state.active_rom = args.rom_test
             state.baseline_deg = None
             state.baseline_set_ts = None
         elif args.rom_test != state.active_rom:
-            # finalize ongoing trial first (if any) — here we don't have HUD yet; pass combined_bgr=None
+            # finalize ongoing trial first (if any)
             if args.auto_rom and state.trial_active:
-                _finalize_if_ready(args, state, time.time(), mmcv.rgb2bgr(color_img.copy()), combined_bgr=None)
+                finalize_rom_trial(args, state, time.time(), mmcv.rgb2bgr(color_img_rgb.copy()), combined_bgr=None)
             state.active_rom = args.rom_test
             state.last_angle = None
             state.angle_series.clear()
             state.baseline_deg = None
             state.baseline_set_ts = None
-            _reset_auto_rom_state(state)
-            state.first_auto_arm_consumed = False   # next baseline lock should auto-arm once
-            state.last_zero_source = 'auto'
+            reset_auto_rom_state(state)
+            state.first_auto_arm_consumed = False
+            state.last_zero_source = "auto"
 
+    # Draw pose (no HUD text here — we keep video clean)
     if visualizer is not None:
+        # NOTE: Some versions of Visualizer accept only (name, image, data_sample=...).
+        # Your local visualizer supports (name, color_img_rgb, depth_img, data_sample=...).
         visualizer.add_datasample(
-            'result',
-            color_img,
+            "result",
+            color_img_rgb,
             depth_img,
             data_sample=data_samples,
             draw_gt=False,
@@ -672,64 +142,58 @@ def process_one_image(args,
             skeleton_style=args.skeleton_style,
             show=False,
             wait_time=0,
-            kpt_thr=args.kpt_thr)
+            kpt_thr=args.kpt_thr,
+        )
 
     frame_rgb = visualizer.get_image()
     frame_bgr = mmcv.rgb2bgr(frame_rgb)
-
     t_now = time.time()
-    pred = data_samples.get('pred_instances', None)
+    pred = data_samples.get("pred_instances", None)
 
+    # 3) Angle calculation (prefer 3D with depth; fallback to 2D)
     angle_t = np.nan
-    current_ids = rom_test.get(args.rom_test, [])
-    is_angle_mode = isinstance(current_ids, (list, tuple)) and len(current_ids) == 3
+    ids = rom_test.get(args.rom_test, [])
+    is_angle_mode = isinstance(ids, (list, tuple)) and len(ids) == 3
 
-    # 3D if depth available; else 2D
     if (depth_img is not None) and (pred is not None):
+        intrin_dict = None
         try:
             intrin_dict = extract_intrinsics_from_depth(depth_img)
         except Exception:
             intrin_dict = None
+
         if intrin_dict is not None:
-            keypoints = getattr(pred, 'transformed_keypoints', None)
-            if keypoints is None:
-                keypoints = pred.keypoints
-            if hasattr(keypoints, 'cpu'):
+            keypoints = getattr(pred, "transformed_keypoints", None) or pred.keypoints
+            if hasattr(keypoints, "cpu"):
                 keypoints = keypoints.cpu().numpy()
-
-            visibility = getattr(pred, 'keypoints_visible', None)
-            if visibility is None:
-                visibility = np.ones(keypoints.shape[:2])
-            elif hasattr(visibility, 'cpu'):
-                visibility = visibility.cpu().numpy()
-
-            if keypoints.shape[0] > 0:
+            visibility = getattr(pred, "keypoints_visible", None)
+            visibility = (
+                np.ones(keypoints.shape[:2])
+                if visibility is None
+                else (visibility.cpu().numpy() if hasattr(visibility, "cpu") else visibility)
+            )
+            if keypoints.shape[0] > 0 and is_angle_mode:
                 joints_xyz = compute_3d_skeletons(keypoints, visibility, depth_img, intrin_dict, args.kpt_thr)
                 joints_xyz = np.array(joints_xyz)
                 try:
-                    if is_angle_mode:
-                        a, b, c = current_ids
-                        angle_t = angle(joints_xyz[0, a], joints_xyz[0, b], joints_xyz[0, c])
-                except Exception as e:
-                    cv2.putText(frame_bgr, f"Angle err: {e}", (10, 22),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+                    a, b, c = ids
+                    angle_t = angle(joints_xyz[0, a], joints_xyz[0, b], joints_xyz[0, c])
+                except Exception:
+                    pass
 
     if (depth_img is None) and (pred is not None) and is_angle_mode:
         try:
-            keypoints = getattr(pred, 'transformed_keypoints', None)
-            if keypoints is None:
-                keypoints = pred.keypoints
-            if hasattr(keypoints, 'cpu'):
+            keypoints = getattr(pred, "transformed_keypoints", None) or pred.keypoints
+            if hasattr(keypoints, "cpu"):
                 keypoints = keypoints.cpu().numpy()
-
-            visibility = getattr(pred, 'keypoints_visible', None)
-            if visibility is None:
-                visibility = np.ones(keypoints.shape[:2])
-            elif hasattr(visibility, 'cpu'):
-                visibility = visibility.cpu().numpy()
-
+            visibility = getattr(pred, "keypoints_visible", None)
+            visibility = (
+                np.ones(keypoints.shape[:2])
+                if visibility is None
+                else (visibility.cpu().numpy() if hasattr(visibility, "cpu") else visibility)
+            )
             if keypoints.shape[0] > 0:
-                a, b, c = current_ids
+                a, b, c = ids
                 k = keypoints[0]
                 v = visibility[0]
                 if np.all(v[[a, b, c]] >= args.kpt_thr):
@@ -737,25 +201,30 @@ def process_one_image(args,
                     bx, by = k[b][:2]
                     cx, cy = k[c][:2]
                     angle_t = angle([ax, ay], [bx, by], [cx, cy])
-        except Exception as e:
-            cv2.putText(frame_bgr, f"2D angle err: {e}", (10, 42),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+        except Exception:
+            pass
 
-    # store raw
+    # Store raw angle for zeroing
     state.current_raw_angle = angle_t if np.isfinite(angle_t) else np.nan
 
-    # === AUTO-ZERO: collect for ~1s after voice preset, then lock baseline ===
+    # ---------------------------------
+    # 4) Auto-zero collector / status
+    # ---------------------------------
+    autozero_line = None  # status line for the text strip
+
     if is_angle_mode and state.auto_zero_pending:
-        if state.auto_zero_start_time is None and np.isfinite(state.current_raw_angle):
-            state.auto_zero_start_time = t_now
-            state.auto_zero_buffer = [float(state.current_raw_angle)]
-            cv2.putText(frame_bgr, "Auto-zero: capturing...", (10, 78),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2, cv2.LINE_AA)
-        elif state.auto_zero_start_time is not None:
+        if state.auto_zero_start_time is None:
+            if np.isfinite(state.current_raw_angle):
+                state.auto_zero_start_time = t_now
+                state.auto_zero_buffer = [float(state.current_raw_angle)]
+                autozero_line = ("Auto-zero: capturing...", (0, 200, 255))
+            else:
+                autozero_line = ("Auto-zero: waiting for stable angle...", (0, 200, 255))
+        else:
             if np.isfinite(state.current_raw_angle):
                 state.auto_zero_buffer.append(float(state.current_raw_angle))
-            cv2.putText(frame_bgr, "Auto-zero: capturing...", (10, 78),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2, cv2.LINE_AA)
+            autozero_line = ("Auto-zero: capturing...", (0, 200, 255))
+
             if (t_now - state.auto_zero_start_time) >= state.auto_zero_window_sec:
                 buf = np.array(state.auto_zero_buffer, dtype=float)
                 buf = buf[np.isfinite(buf)]
@@ -770,19 +239,23 @@ def process_one_image(args,
                         state.auto_zero_buffer.clear()
                         state.angle_series.clear()
                         state.last_angle = None
-                        _reset_auto_rom_state(state, keep_trial_ready=False)
-                        # --- ARMING RULES ---
+                        reset_auto_rom_state(state, keep_trial_ready=False)
+
+                        # Arming rules after zero
                         if state.arm_after_baseline:
                             state.trial_armed = True
                             state.arm_after_baseline = False
                             state.first_auto_arm_consumed = True
-                        elif (state.last_zero_source == 'auto') and (not state.first_auto_arm_consumed):
+                        elif (state.last_zero_source == "auto") and (not state.first_auto_arm_consumed):
                             state.trial_armed = True
                             state.first_auto_arm_consumed = True
                         else:
                             state.trial_armed = False
+
                         print(f"[AUTO-ZERO] Baseline locked at {baseline:.2f}° for {args.rom_test}")
+                        autozero_line = None  # done
                     else:
+                        # too jittery -> extend window
                         state.auto_zero_start_time = t_now
                         state.auto_zero_buffer = []
                         print("[AUTO-ZERO] Too jittery; extending capture window.")
@@ -791,15 +264,13 @@ def process_one_image(args,
                     state.auto_zero_buffer = []
                     print("[AUTO-ZERO] Not enough valid samples; extending capture window.")
 
-    # apply baseline
-    if np.isfinite(angle_t) and (state.baseline_deg is not None):
-        angle_disp = angle_t - state.baseline_deg
-    else:
-        angle_disp = angle_t
+    # Angle after baseline subtraction (if any)
+    angle_disp = angle_t - state.baseline_deg if (np.isfinite(angle_t) and (state.baseline_deg is not None)) else angle_t
 
-    # === AUTO-ROM: smoothing + velocity + extrema + (NO finalize yet) ========
+    # ---------------------------------
+    # 5) Auto-ROM core
+    # ---------------------------------
     if args.auto_rom and is_angle_mode and np.isfinite(angle_disp):
-        # EMA smoothing
         if state.filt_angle is None:
             state.filt_angle = float(angle_disp)
             state.prev_filt_angle = float(angle_disp)
@@ -811,7 +282,7 @@ def process_one_image(args,
             dt = max(t_now - (state.prev_ts or t_now), 1e-6)
             state.vel_dps = (state.filt_angle - (state.prev_filt_angle if state.prev_filt_angle is not None else state.filt_angle)) / dt
 
-            # hysteresis counters
+            # Hysteresis counters
             if abs(state.vel_dps) > args.rom_v_go:
                 state.moving_counter += 1
             else:
@@ -825,7 +296,7 @@ def process_one_image(args,
                 state.stopped_counter = 0
                 state.stopped_since_ts = None
 
-            # movement sign tracker
+            # Movement sign
             if state.vel_dps > args.rom_v_stop:
                 state.last_move_sign = +1
             elif state.vel_dps < -args.rom_v_stop:
@@ -833,7 +304,7 @@ def process_one_image(args,
             elif abs(state.vel_dps) > 1.0 and state.last_move_sign == 0:
                 state.last_move_sign = 1 if state.vel_dps > 0 else -1
 
-            # hold window when near-stopped
+            # Hold window when near-stopped
             if abs(state.vel_dps) < args.rom_v_stop:
                 state.hold_window.append((t_now, state.filt_angle))
                 while state.hold_window and (t_now - state.hold_window[0][0] > args.rom_hold_sec + 0.2):
@@ -841,22 +312,20 @@ def process_one_image(args,
             else:
                 state.hold_window.clear()
 
-            # Clear after-lock latch when fresh motion resumes
+            # Clear latch when fresh motion arrives
             if state.after_lock_motion_needed and abs(state.vel_dps) > args.rom_v_go:
                 state.after_lock_motion_needed = False
 
-            # gate trial start (armed + velocity + amplitude)
-            _maybe_start_trial(args, state, t_now)
-
-            # lock candidate extrema during segment
+            # Gate trial start and lock extrema
+            maybe_start_trial(args, state, t_now)
             if state.trial_active:
-                _confirm_hold_and_lock_extremum(args, state, t_now, frame_bgr)
+                confirm_hold_and_lock_extremum(args, state, t_now, frame_bgr)
 
-            # DO NOT finalize here; we want HUD frames in saved images
+            # Update history
             state.prev_filt_angle = state.filt_angle
             state.prev_ts = t_now
 
-    # =======================  PLOT / HUD  ==================================
+    # 6) Update series for sparkline
     if state is not None and args.plot_seconds > 0 and is_angle_mode and np.isfinite(angle_disp):
         state.last_angle = float(angle_disp)
         state.angle_series.append((t_now, float(angle_disp)))
@@ -864,65 +333,70 @@ def process_one_image(args,
         while state.angle_series and state.angle_series[0][0] < cutoff:
             state.angle_series.popleft()
 
-    # HUD
+    # 7) Build text strip (no text drawn on the video itself)
+    H, W = frame_bgr.shape[:2]
+    lines = []
+    if autozero_line is not None:
+        lines.append(autozero_line)
+
     if is_angle_mode:
         if np.isfinite(angle_disp):
-            cv2.putText(frame_bgr, f"Angle: {angle_disp:.1f} deg", (10, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 240, 0), 2, cv2.LINE_AA)
+            lines.append((f"Angle: {angle_disp:.1f} deg", (0, 240, 0)))
         else:
-            cv2.putText(frame_bgr, "Angle: --.- deg", (10, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 240, 240), 2, cv2.LINE_AA)
+            lines.append(("Angle: --.- deg", (0, 240, 240)))
     else:
-        cv2.putText(frame_bgr, f"ROM: {args.rom_test} (no angle)", (10, 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 240, 240), 2, cv2.LINE_AA)
+        lines.append((f"ROM: {args.rom_test} (no angle)", (0, 240, 240)))
 
     arm_text = "Active" if state.trial_active else ("Armed" if state.trial_armed else "Disarmed")
-    cv2.putText(frame_bgr, f"Test: {args.rom_test} | "
-                        f"{'Zeroed' if state.baseline_deg is not None else 'Unzeroed'} | "
-                        f"{arm_text}", (10, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2, cv2.LINE_AA)
+    zero_text = "Zeroed" if state.baseline_deg is not None else "Unzeroed"
+    lines.append((f"Test: {args.rom_test}   |   {zero_text}   |   {arm_text}", (200, 200, 200)))
 
-    H, W = frame_bgr.shape[:2]
-    sparkline = render_sparkline_strip(
+    text_strip = render_text_strip(
         width=W,
-        height=int(args.plot_height),
-        series=list(state.angle_series) if (state is not None and is_angle_mode) else [],
-        t_now=t_now,
-        window_sec=float(args.plot_seconds),
-        label_text="Angle history (s)",
-        gap_sec=float(args.plot_gap_sec)
-    ) if args.plot_seconds > 0 else None
+        height=int(args.text_strip_height),
+        lines=lines,
+        bg_mode=str(args.text_strip_bg),
+    )
 
+    # 8) Optional sparkline strip
+    sparkline = (
+        render_sparkline_strip(
+            width=W,
+            height=int(args.plot_height),
+            series=list(state.angle_series) if (state is not None and is_angle_mode) else [],
+            t_now=t_now,
+            window_sec=float(args.plot_seconds),
+            label_text="Angle history (s)",
+            gap_sec=float(args.plot_gap_sec),
+        )
+        if args.plot_seconds > 0
+        else None
+    )
+
+    # 9) Compose final frame: video + text + (optional) sparkline
+    rows = [frame_bgr, text_strip]
     if sparkline is not None:
-        combined_bgr = np.vstack([frame_bgr, sparkline])
-    else:
-        combined_bgr = frame_bgr
+        rows.append(sparkline)
+    combined_bgr = np.vstack(rows)
 
-    # attach frame to most recent locked event (after rendering)
-    if args.auto_rom and state.pending_capture_kind in ('min', 'max') and state.extrema_events:
-        for evt in reversed(state.extrema_events):
-            if evt['frame'] is None and evt['kind'] == state.pending_capture_kind:
-                evt['frame'] = combined_bgr.copy()
-                break
-        state.pending_capture_kind = None
+    # Attach HUD frame to the just-locked extremum, if any
+    attach_locked_frame_if_pending(state, combined_bgr)
 
-    # ============
-    # Input: Voice, then Keyboard
-    # ============
-    if voice and voice.enabled:
+    # 10) Voice + hotkeys
+    if voice:
         while True:
             cmd = voice.poll()
             if cmd is None:
                 break
-            apply_voice_command(args, state, cmd, reset_auto_rom_state=_reset_auto_rom_state)
+            apply_voice_command(args, state, cmd, reset_auto_rom_state)
 
     if args.show:
         cv2.imshow("Pose", combined_bgr)
         key = cv2.pollKey() if hasattr(cv2, "pollKey") else cv2.waitKey(1)
         handle_hotkeys_for_presets(args, key)
 
-        # hotkey: b to zero baseline manually
-        if key == ord('b'):
+        # Manual baseline zero via 'b'
+        if key == ord("b"):
             if np.isfinite(state.current_raw_angle):
                 state.baseline_deg = float(state.current_raw_angle)
                 state.baseline_set_ts = time.time()
@@ -931,17 +405,16 @@ def process_one_image(args,
                 state.auto_zero_pending = False
                 state.auto_zero_start_time = None
                 state.auto_zero_buffer.clear()
-                _reset_auto_rom_state(state, keep_trial_ready=False)
-                # manual zero does NOT auto-arm
+                reset_auto_rom_state(state, keep_trial_ready=False)
                 state.trial_armed = False
                 state.first_auto_arm_consumed = True
-                state.last_zero_source = 'manual'
+                state.last_zero_source = "manual"
                 print(f"[KPT] Baseline set to {state.baseline_deg:.2f}°")
             else:
                 print("[KPT] Cannot zero: no valid angle this frame.")
 
-        # optional: s to arm start (subsequent reps)
-        if key == ord('s'):
+        # Arm start via 's'
+        if key == ord("s"):
             if state.baseline_deg is None:
                 state.arm_after_baseline = True
                 print("[ROM] Start queued. Will arm as soon as baseline locks.")
@@ -956,82 +429,100 @@ def process_one_image(args,
     else:
         key = -1
 
-    # === FINALIZE AFTER HUD IS DRAWN ===
+    # 11) Finalize (after HUD is drawn so saved frames include it)
     if args.auto_rom and is_angle_mode:
-        _finalize_if_ready(args, state, t_now, frame_bgr, combined_bgr)
+        finalize_rom_trial(args, state, t_now, frame_bgr, combined_bgr)
 
-    return data_samples.get('pred_instances', None), key, combined_bgr
+    return data_samples.get("pred_instances", None), key, combined_bgr
 
 
 def mouse_callback(event, x, y, flags, param):
     if event == cv2.EVENT_MOUSEMOVE:
         depth = param.get_distance(x, y)
-        print(f"[mouse_callback] Mouse = ({x}, {y}) → Distance: {depth:.3f} meters")
+        print(f"[mouse_callback] Mouse = ({x}, {y}) → Distance: {depth:.3f} m")
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument('det_config')
-    parser.add_argument('det_checkpoint')
-    parser.add_argument('pose_config')
-    parser.add_argument('pose_checkpoint')
-    parser.add_argument('--input', type=str, default='')
-    parser.add_argument('--show', action='store_true', default=False)
-    parser.add_argument('--show-result', action='store_true', default=False,
-                        help='Pop a separate result window and save ROM_PANEL.png on finalize (requires --show).')
-    parser.add_argument('--output-root', type=str, default='')
-    parser.add_argument('--save-predictions', action='store_true', default=False)
-    parser.add_argument('--device', default='cuda:0')
-    parser.add_argument('--det-cat-id', type=int, default=0)
-    parser.add_argument('--bbox-thr', type=float, default=0.3)
-    parser.add_argument('--nms-thr', type=float, default=0.3)
-    parser.add_argument('--kpt-thr', type=float, default=0.3)
-    parser.add_argument('--draw-heatmap', action='store_true', default=False)
-    parser.add_argument('--show-kpt-idx', action='store_true', default=False)
-    parser.add_argument('--skeleton-style', default='mmpose', type=str,
-                        choices=['mmpose', 'openpose'])
-    parser.add_argument('--radius', type=int, default=3)
-    parser.add_argument('--thickness', type=int, default=3)
-    parser.add_argument('--show-interval', type=int, default=0)
-    parser.add_argument('--alpha', type=float, default=0.8)
-    parser.add_argument('--draw-bbox', action='store_true')
+    parser.add_argument("det_config")
+    parser.add_argument("det_checkpoint")
+    parser.add_argument("pose_config")
+    parser.add_argument("pose_checkpoint")
+    parser.add_argument("--input", type=str, default="")
+    parser.add_argument("--show", action="store_true", default=False)
+    parser.add_argument(
+        "--show-result",
+        action="store_true",
+        default=False,
+        help="Pop a separate ROM panel window & save ROM_PANEL.png on finalize (requires --show).",
+    )
+    parser.add_argument("--output-root", type=str, default="")
+    parser.add_argument("--save-predictions", action="store_true", default=False)
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--det-cat-id", type=int, default=0)
+    parser.add_argument("--bbox-thr", type=float, default=0.3)
+    parser.add_argument("--nms-thr", type=float, default=0.3)
+    parser.add_argument("--kpt-thr", type=float, default=0.3)
+    parser.add_argument("--draw-heatmap", action="store_true", default=False)
+    parser.add_argument("--show-kpt-idx", action="store_true", default=False)
+    parser.add_argument("--skeleton-style", default="mmpose", type=str, choices=["mmpose", "openpose"])
+    parser.add_argument("--radius", type=int, default=3)
+    parser.add_argument("--thickness", type=int, default=3)
+    parser.add_argument("--show-interval", type=int, default=0)
+    parser.add_argument("--alpha", type=float, default=0.8)
+    parser.add_argument("--draw-bbox", action="store_true")
 
-    parser.add_argument('--rom_test', default="full_body", type=str)
-    parser.add_argument('--show3d', action='store_true')
+    parser.add_argument("--rom_test", default="full_body", type=str)
+    parser.add_argument("--show3d", action="store_true")
 
-    parser.add_argument('--plot-seconds', type=float, default=5.0)
-    parser.add_argument('--plot-height', type=int, default=80)
-    parser.add_argument('--plot-gap-sec', type=float, default=0.4)
+    # Sparkline controls
+    parser.add_argument("--plot-seconds", type=float, default=5.0)
+    parser.add_argument("--plot-height", type=int, default=80)
+    parser.add_argument("--plot-gap-sec", type=float, default=0.4)
 
-    # Voice (moved to utils_voice)
+    # Text strip controls
+    parser.add_argument(
+        "--text-strip-height",
+        type=int,
+        default=72,
+        help="Height (px) of the HUD text strip under the video.",
+    )
+    parser.add_argument(
+        "--text-strip-bg",
+        type=str,
+        default="dark",
+        choices=["dark", "light"],
+        help="Background mode for the HUD text strip.",
+    )
+
+    # Voice args
     add_voice_args(parser)
 
-    # AUTO-ROM
-    parser.add_argument('--auto-rom', action='store_true', help='Auto-detect min/max/ROM, save images + JSON')
-    parser.add_argument('--rom-ema-alpha', type=float, default=0.25)
-    parser.add_argument('--rom-v-go', type=float, default=12.0)
-    parser.add_argument('--rom-v-stop', type=float, default=6.0)
-    parser.add_argument('--rom-hold-sec', type=float, default=0.4)
-    parser.add_argument('--rom-std-max', type=float, default=2.0)
-    parser.add_argument('--rom-min-amplitude', type=float, default=10.0)
-    parser.add_argument('--rom-timeout-sec', type=float, default=12.0)
-    parser.add_argument('--rom-start-amp', type=float, default=5.0, help='Min |angle| from baseline to start trial (deg)')
-    parser.add_argument('--rom-baseline-tol', type=float, default=5.0, help='How close counts as baseline (deg)')
-    parser.add_argument('--rom-baseline-hold-sec', type=float, default=0.6, help='Hold near baseline to finalize (s)')
-    parser.add_argument('--rom-refractory-sec', type=float, default=1.0, help='Cooldown after finalize before any re-arm (s)')
-    parser.add_argument('--rom-lock-refractory-sec', type=float, default=0.8, help='Cooldown after locking MIN/MAX (s)')
+    # AUTO-ROM thresholds
+    parser.add_argument("--auto-rom", action="store_true", help="Auto-detect min/max/ROM, save images + JSON")
+    parser.add_argument("--rom-ema-alpha", type=float, default=0.25)
+    parser.add_argument("--rom-v-go", type=float, default=12.0)
+    parser.add_argument("--rom-v-stop", type=float, default=6.0)
+    parser.add_argument("--rom-hold-sec", type=float, default=0.4)
+    parser.add_argument("--rom-std-max", type=float, default=2.0)
+    parser.add_argument("--rom-min-amplitude", type=float, default=10.0)
+    parser.add_argument("--rom-timeout-sec", type=float, default=12.0)
+    parser.add_argument("--rom-start-amp", type=float, default=5.0)
+    parser.add_argument("--rom-baseline-tol", type=float, default=5.0)
+    parser.add_argument("--rom-baseline-hold-sec", type=float, default=0.6)
+    parser.add_argument("--rom-refractory-sec", type=float, default=1.0)
+    parser.add_argument("--rom-lock-refractory-sec", type=float, default=0.8)
 
-    assert has_mmdet, 'Please install mmdet to run the demo.'
     args = parser.parse_args()
 
     if args.auto_rom:
-        assert args.output_root != '', "--auto-rom requires --output-root to save results."
+        assert args.output_root != "", "--auto-rom requires --output-root to save results."
 
     args.kpt_preset_name = args.rom_test
     set_kpt_preset(args, args.kpt_preset_name)
 
-    assert args.show or (args.output_root != '')
-    assert args.input != ''
+    assert args.show or (args.output_root != "")
+    assert args.input != ""
     assert args.det_config is not None
     assert args.det_checkpoint is not None
 
@@ -1039,21 +530,31 @@ def main():
     if args.output_root:
         mmengine.mkdir_or_exist(args.output_root)
         output_file = os.path.join(args.output_root, os.path.basename(args.input))
-        if args.input == 'webcam':
-            output_file += '.mp4'
+        if args.input == "webcam":
+            output_file += ".mp4"
 
     if args.save_predictions:
-        assert args.output_root != ''
-        args.pred_save_path = f'{args.output_root}/results_{os.path.splitext(os.path.basename(args.input))[0]}.json'
+        assert args.output_root != ""
+        args.pred_save_path = f"{args.output_root}/results_{os.path.splitext(os.path.basename(args.input))[0]}.json"
 
+    # Init detector
     detector = init_detector(args.det_config, args.det_checkpoint, device=args.device)
     detector.cfg = adapt_mmdet_pipeline(detector.cfg)
 
+    # Init pose estimator (disable flip-test/TTA for speed)
     pose_estimator = init_pose_estimator(
         args.pose_config,
         args.pose_checkpoint,
         device=args.device,
-        cfg_options=dict(model=dict(test_cfg=dict(output_heatmaps=args.draw_heatmap))))
+        cfg_options=dict(
+            model=dict(
+                test_cfg=dict(
+                    output_heatmaps=args.draw_heatmap,
+                    flip_test=False,  # <— speed-up
+                )
+            )
+        ),
+    )
 
     pose_estimator.cfg.visualizer.radius = args.radius
     pose_estimator.cfg.visualizer.alpha = args.alpha
@@ -1063,27 +564,28 @@ def main():
 
     state = SessionState()
 
-    # Start voice (optional, via utils_voice)
+    # Voice (optional)
     voice = init_voice_from_args(args)
 
     # Determine input type
-    if args.input == 'webcam':
-        input_type = 'webcam'
-    elif args.input == 'realsense':
-        input_type = 'realsense'
+    if args.input == "webcam":
+        input_type = "webcam"
+    elif args.input == "realsense":
+        input_type = "realsense"
     else:
         mt = mimetypes.guess_type(args.input)[0]
-        input_type = mt.split('/')[0] if mt else 'video'
+        input_type = mt.split("/")[0] if mt else "video"
 
-    if input_type == 'image':
+    if input_type == "image":
         pred_instances, key, combined_bgr = process_one_image(
-            args, args.input, None, detector, pose_estimator, visualizer, 0, state, voice)
+            args, args.input, None, detector, pose_estimator, visualizer, 0, state, voice
+        )
         if args.save_predictions:
             pred_instances_list = split_instances(pred_instances)
         if output_file:
             mmcv.imwrite(combined_bgr, output_file)
 
-    elif input_type == 'realsense':
+    elif input_type == "realsense":
         if rs is None:
             raise ImportError("pyrealsense2 is required for 'realsense' input mode.")
 
@@ -1108,17 +610,18 @@ def main():
                 depth_image = depth_frame
 
                 pred_instances, key, combined_bgr = process_one_image(
-                    args, color_image, depth_image, detector, pose_estimator, visualizer, 0.001, state, voice)
+                    args, color_image, depth_image, detector, pose_estimator, visualizer, 0.001, state, voice
+                )
 
-                if key == 27:
+                if key == 27:  # ESC
                     break
         finally:
             pipeline.stop()
             if voice:
                 voice.stop()
 
-    elif input_type in ['webcam', 'video']:
-        cap = cv2.VideoCapture(0) if args.input == 'webcam' else cv2.VideoCapture(args.input)
+    elif input_type in ["webcam", "video"]:
+        cap = cv2.VideoCapture(0) if args.input == "webcam" else cv2.VideoCapture(args.input)
         video_writer = None
         pred_instances_list = []
         frame_idx = 0
@@ -1131,7 +634,8 @@ def main():
                     break
 
                 pred_instances, key, combined_bgr = process_one_image(
-                    args, frame, None, detector, pose_estimator, visualizer, 0.001, state, voice)
+                    args, frame, None, detector, pose_estimator, visualizer, 0.001, state, voice
+                )
 
                 if key == 27:
                     break
@@ -1141,7 +645,7 @@ def main():
 
                 if output_file:
                     if video_writer is None:
-                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                         H, W = combined_bgr.shape[:2]
                         video_writer = cv2.VideoWriter(output_file, fourcc, 25, (W, H))
                     video_writer.write(combined_bgr)
@@ -1156,17 +660,19 @@ def main():
         args.save_predictions = False
         if voice:
             voice.stop()
-        raise ValueError(f'file {os.path.basename(args.input)} has invalid format.')
+        raise ValueError(f"file {os.path.basename(args.input)} has invalid format.")
 
     if args.save_predictions:
-        with open(args.pred_save_path, 'w') as f:
-            json.dump(dict(meta_info=pose_estimator.dataset_meta, instance_info=pred_instances_list), f, indent='\t')
-        print(f'predictions have been saved at {args.pred_save_path}')
+        with open(args.pred_save_path, "w") as f:
+            json.dump(
+                dict(meta_info=pose_estimator.dataset_meta, instance_info=pred_instances_list), f, indent="\t"
+            )
+        print(f"predictions have been saved at {args.pred_save_path}")
 
     if output_file:
-        input_type_print = input_type.replace('webcam', 'video')
-        print_log(f'the output {input_type_print} has been saved at {output_file}', logger='current', level=logging.INFO)
+        input_type_print = input_type.replace("webcam", "video")
+        print_log(f"the output {input_type_print} has been saved at {output_file}", logger="current", level=logging.INFO)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
