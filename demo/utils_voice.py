@@ -217,49 +217,108 @@ def cycle_for_voice(name: str, step: int) -> str:
 def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
     """
     Translate voice tuples into state transitions.
-    Optionally pass a `reset_auto_rom_state(state, keep_trial_ready=False)` callable from the main app
-    to clear ROM state (avoids circular imports).
+    Optionally pass a `reset_auto_rom_state(state, keep_trial_ready=False)` callable from the main app.
     """
     if cmd_tuple is None:
         return
     cmd, arg = cmd_tuple
 
-    # ----------------------------------------------------------------------
-    # DEBUG MODE: display-only. Allow preset changes, but NO state mutation.
-    # ----------------------------------------------------------------------
+    # ---------------------------- DEBUG MODE ----------------------------
     if getattr(args, 'debug', False):
         if cmd == 'preset':
             if arg in rom_test:
                 set_kpt_preset(args, arg)
-                print(f"[VOICE][DEBUG] preset → '{arg}' (ROM tracking disabled)")
+                if args.zero and state is not None:
+                    state.auto_zero_pending = True
+                    state.auto_zero_start_time = None
+                    state.auto_zero_buffer.clear()
+                    state.baseline_deg = None
+                    state.baseline_set_ts = None
+                    state.last_angle = None
+                    state.angle_series.clear()
+                    state.first_auto_arm_consumed = False
+                    state.last_zero_source = 'auto'
+                else:
+                    if state is not None:
+                        state.auto_zero_pending = False
+                print(f"[VOICE][DEBUG] preset → '{arg}' ({'zeroing on' if args.zero else 'no-zero'})")
             else:
                 print(f"[VOICE] Unknown preset: {arg}")
             return
-        elif cmd == 'next':
-            set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, +1))
-            print(f"[VOICE][DEBUG] preset → '{args.rom_test}' (ROM tracking disabled)")
-            return
-        elif cmd == 'prev':
-            set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, -1))
-            print(f"[VOICE][DEBUG] preset → '{args.rom_test}' (ROM tracking disabled)")
-            return
-        elif cmd == 'zero':
-            print("[VOICE][DEBUG] Ignoring 'zero' in --debug.")
-            return
-        elif cmd == 'start':
-            print("[VOICE][DEBUG] Ignoring 'start' in --debug.")
-            return
-        # Any other commands: ignore silently in debug
-        return
 
-    # ----------------------------------------------------------------------
-    # NORMAL MODE (non-debug): original behavior
-    # ----------------------------------------------------------------------
+        elif cmd in ('next', 'prev'):
+            step = +1 if cmd == 'next' else -1
+            set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, step))
+            if args.zero and state is not None:
+                state.auto_zero_pending = True
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                state.baseline_deg = None
+                state.baseline_set_ts = None
+                state.last_angle = None
+                state.angle_series.clear()
+                state.first_auto_arm_consumed = False
+                state.last_zero_source = 'auto'
+            else:
+                if state is not None:
+                    state.auto_zero_pending = False
+            print(f"[VOICE][DEBUG] preset → '{args.rom_test}' ({'zeroing on' if args.zero else 'no-zero'})")
+            return
+
+        elif cmd == 'zero':
+            if not args.zero:
+                print("[VOICE][DEBUG] Ignoring 'zero' (no-zero mode).")
+                return
+            if (state is not None) and np.isfinite(state.current_raw_angle):
+                state.baseline_deg = float(state.current_raw_angle)
+                state.baseline_set_ts = time.time()
+                state.angle_series.clear()
+                state.last_angle = None
+                state.auto_zero_pending = False
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                # debug: never arm; just update display baseline
+                state.trial_armed = False
+                state.first_auto_arm_consumed = True
+                state.last_zero_source = 'manual'
+                print(f"[VOICE][DEBUG] Baseline set to {state.baseline_deg:.2f}°")
+            else:
+                print("[VOICE][DEBUG] Cannot zero: no valid angle this frame.")
+            return
+
+        elif cmd == 'start':
+            print("[VOICE][DEBUG] Ignoring 'start' in debug.")
+            return
+
+        return  # ignore anything else in debug
+
+    # -------------------------- NON-DEBUG MODE --------------------------
     if cmd == 'preset':
         if arg in rom_test:
             set_kpt_preset(args, arg)
             if state is not None:
-                # Arm auto-zero and reset baseline + ROM state
+                if args.zero:
+                    state.auto_zero_pending = True
+                    state.auto_zero_start_time = None
+                    state.auto_zero_buffer.clear()
+                    state.baseline_deg = None
+                    state.baseline_set_ts = None
+                    state.last_angle = None
+                    state.angle_series.clear()
+                    if callable(reset_auto_rom_state):
+                        reset_auto_rom_state(state)
+                    state.first_auto_arm_consumed = False
+                    state.last_zero_source = 'auto'
+                else:
+                    state.auto_zero_pending = False
+        else:
+            print(f"[VOICE] Unknown preset: {arg}")
+
+    elif cmd in ('next', 'prev'):
+        step = +1 if cmd == 'next' else -1
+        set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, step))
+        if state is not None:
+            if args.zero:
                 state.auto_zero_pending = True
                 state.auto_zero_start_time = None
                 state.auto_zero_buffer.clear()
@@ -269,46 +328,15 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
                 state.angle_series.clear()
                 if callable(reset_auto_rom_state):
                     reset_auto_rom_state(state)
-                # this preset-triggered zero enables exactly ONE auto-arm after baseline
                 state.first_auto_arm_consumed = False
                 state.last_zero_source = 'auto'
-                print(f"[AUTO-ZERO] Armed for preset '{arg}'. Holding ~{state.auto_zero_window_sec:.1f}s before baseline lock.")
-        else:
-            print(f"[VOICE] Unknown preset: {arg}")
-
-    elif cmd == 'next':
-        set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, +1))
-        if state is not None:
-            state.auto_zero_pending = True
-            state.auto_zero_start_time = None
-            state.auto_zero_buffer.clear()
-            state.baseline_deg = None
-            state.baseline_set_ts = None
-            state.last_angle = None
-            state.angle_series.clear()
-            if callable(reset_auto_rom_state):
-                reset_auto_rom_state(state)
-            state.first_auto_arm_consumed = False
-            state.last_zero_source = 'auto'
-            print(f"[AUTO-ZERO] Armed for next preset '{args.rom_test}'.")
-
-    elif cmd == 'prev':
-        set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, -1))
-        if state is not None:
-            state.auto_zero_pending = True
-            state.auto_zero_start_time = None
-            state.auto_zero_buffer.clear()
-            state.baseline_deg = None
-            state.baseline_set_ts = None
-            state.last_angle = None
-            state.angle_series.clear()
-            if callable(reset_auto_rom_state):
-                reset_auto_rom_state(state)
-            state.first_auto_arm_consumed = False
-            state.last_zero_source = 'auto'
-            print(f"[AUTO-ZERO] Armed for prev preset '{args.rom_test}'.")
+            else:
+                state.auto_zero_pending = False
 
     elif cmd == 'zero':
+        if not args.zero:
+            print("[VOICE] Ignoring 'zero' (no-zero mode).")
+            return
         if (state is not None) and np.isfinite(state.current_raw_angle):
             state.baseline_deg = float(state.current_raw_angle)
             state.baseline_set_ts = time.time()
@@ -328,13 +356,14 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
             print("[VOICE] Cannot zero: no valid angle this frame.")
 
     elif cmd == 'start':
-        if state.baseline_deg is None:
+        # unchanged: allows arming in non-debug
+        if state.baseline_deg is None and args.zero:
             state.arm_after_baseline = True
             print("[ROM] Start queued. Will arm as soon as baseline locks.")
         else:
             state.trial_armed = True
             state.arm_after_baseline = False
-            state.first_auto_arm_consumed = True  # consume auto-first
+            state.first_auto_arm_consumed = True
             print("[ROM] Armed for a single repetition. Move when ready.")
 
 # ----------------------------

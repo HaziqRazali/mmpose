@@ -71,6 +71,19 @@ except (ImportError, ModuleNotFoundError):
 # Main per-frame processing
 # =========================
 
+def _rel_angle_deg(state, raw_angle_deg):
+    """
+    Returns angle relative to baseline if available; otherwise raw angle.
+    Lets ROM run in --no-zero (baseline=None) without crashing.
+    """
+    if raw_angle_deg is None or not np.isfinite(raw_angle_deg):
+        return raw_angle_deg
+    if state.baseline_deg is None:
+        # no baseline (either not yet locked or --no-zero)
+        return float(raw_angle_deg)
+    return float(raw_angle_deg - state.baseline_deg)
+
+
 def process_one_image(
     args,
     color_img,
@@ -115,14 +128,28 @@ def process_one_image(
             # finalize ongoing trial first (if any) — but NEVER in --debug
             if (not args.debug) and args.auto_rom and state.trial_active:
                 finalize_rom_trial(args, state, time.time(), mmcv.rgb2bgr(color_img_rgb.copy()), combined_bgr=None)
+
             state.active_rom = args.rom_test
             state.last_angle = None
             state.angle_series.clear()
-            state.baseline_deg = None
-            state.baseline_set_ts = None
-            reset_auto_rom_state(state)
-            state.first_auto_arm_consumed = False
-            state.last_zero_source = "auto"
+
+            # Auto-zero arming only when zeroing is enabled
+            if args.zero:
+                state.auto_zero_pending = True
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                state.baseline_deg = None
+                state.baseline_set_ts = None
+                state.first_auto_arm_consumed = False
+                state.last_zero_source = 'auto'
+            else:
+                # No-zero mode: keep baseline None and ensure nothing waits for it
+                state.auto_zero_pending = False
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                state.baseline_deg = None
+                state.baseline_set_ts = None
+                # do not arm here; arming decisions will use raw angle
 
     # Draw pose (no HUD text here — we keep video clean)
     if visualizer is not None:
@@ -209,7 +236,7 @@ def process_one_image(
     # ---------------------------------
     autozero_line = None  # status line for the text strip
 
-    if is_angle_mode and (not args.debug) and state.auto_zero_pending:
+    if is_angle_mode and args.zero and state.auto_zero_pending:
         if state.auto_zero_start_time is None:
             if np.isfinite(state.current_raw_angle):
                 state.auto_zero_start_time = t_now
@@ -262,7 +289,7 @@ def process_one_image(
                     print("[AUTO-ZERO] Not enough valid samples; extending capture window.")
 
     # Angle after baseline subtraction (if any)
-    angle_disp = angle_t - state.baseline_deg if (np.isfinite(angle_t) and (state.baseline_deg is not None)) else angle_t
+    angle_disp = _rel_angle_deg(state, angle_t)
 
     # ---------------------------------
     # 5) Auto-ROM core
@@ -393,35 +420,34 @@ def process_one_image(
         key = cv2.pollKey() if hasattr(cv2, "pollKey") else cv2.waitKey(1)
         handle_hotkeys_for_presets(args, key)
 
-        if not args.debug:
-            # Manual baseline zero via 'b'
-            if key == ord("b"):
-                if np.isfinite(state.current_raw_angle):
-                    state.baseline_deg = float(state.current_raw_angle)
-                    state.baseline_set_ts = time.time()
-                    state.angle_series.clear()
-                    state.last_angle = None
-                    state.auto_zero_pending = False
-                    state.auto_zero_start_time = None
-                    state.auto_zero_buffer.clear()
-                    reset_auto_rom_state(state, keep_trial_ready=False)
-                    state.trial_armed = False
-                    state.first_auto_arm_consumed = True
-                    state.last_zero_source = "manual"
-                    print(f"[KPT] Baseline set to {state.baseline_deg:.2f}°")
-                else:
-                    print("[KPT] Cannot zero: no valid angle this frame.")
+        # Manual baseline zero via 'b'
+        if key == ord("b"):
+            if np.isfinite(state.current_raw_angle):
+                state.baseline_deg = float(state.current_raw_angle)
+                state.baseline_set_ts = time.time()
+                state.angle_series.clear()
+                state.last_angle = None
+                state.auto_zero_pending = False
+                state.auto_zero_start_time = None
+                state.auto_zero_buffer.clear()
+                reset_auto_rom_state(state, keep_trial_ready=False)
+                state.trial_armed = False
+                state.first_auto_arm_consumed = True
+                state.last_zero_source = "manual"
+                print(f"[KPT] Baseline set to {state.baseline_deg:.2f}°")
+            else:
+                print("[KPT] Cannot zero: no valid angle this frame.")
 
-            # Arm start via 's'
-            if key == ord("s"):
-                if state.baseline_deg is None:
-                    state.arm_after_baseline = True
-                    print("[ROM] Start queued. Will arm as soon as baseline locks.")
-                else:
-                    state.trial_armed = True
-                    state.arm_after_baseline = False
-                    state.first_auto_arm_consumed = True
-                    print("[ROM] Armed for a single repetition. Move when ready.")
+        # Arm start via 's'
+        if key == ord("s"):
+            if state.baseline_deg is None:
+                state.arm_after_baseline = True
+                print("[ROM] Start queued. Will arm as soon as baseline locks.")
+            else:
+                state.trial_armed = True
+                state.arm_after_baseline = False
+                state.first_auto_arm_consumed = True
+                print("[ROM] Armed for a single repetition. Move when ready.")
 
         if args.show_interval > 0:
             time.sleep(args.show_interval)
@@ -506,6 +532,23 @@ def main():
 
     # Voice args
     add_voice_args(parser)
+
+    # ---- ZEROING CONTROL ----------------------------------------------------
+    # Default: auto-zero enabled unless explicitly disabled with --no-zero.
+    zero_group = parser.add_mutually_exclusive_group()
+    zero_group.add_argument(
+        "--zero",
+        dest="zero",
+        action="store_true",
+        help="Enable baseline zeroing (auto/manual). Default if neither flag given."
+    )
+    zero_group.add_argument(
+        "--no-zero",
+        dest="zero",
+        action="store_false",
+        help="Disable baseline zeroing (auto/manual). Angles use raw values."
+    )
+    parser.set_defaults(zero=True)
 
     # ---- DEBUG MODE ---------------------------------------------------------
     # Display-only: still runs detection/pose/angle + HUD,
