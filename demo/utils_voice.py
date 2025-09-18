@@ -216,6 +216,37 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
         return
     cmd, arg = cmd_tuple
 
+    # ----------------------------------------------------------------------
+    # DEBUG MODE: display-only. Allow preset changes, but NO state mutation.
+    # ----------------------------------------------------------------------
+    if getattr(args, 'debug', False):
+        if cmd == 'preset':
+            if arg in rom_test:
+                set_kpt_preset(args, arg)
+                print(f"[VOICE][DEBUG] preset → '{arg}' (ROM tracking disabled)")
+            else:
+                print(f"[VOICE] Unknown preset: {arg}")
+            return
+        elif cmd == 'next':
+            set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, +1))
+            print(f"[VOICE][DEBUG] preset → '{args.rom_test}' (ROM tracking disabled)")
+            return
+        elif cmd == 'prev':
+            set_kpt_preset(args, cycle_for_voice(args.kpt_preset_name, -1))
+            print(f"[VOICE][DEBUG] preset → '{args.rom_test}' (ROM tracking disabled)")
+            return
+        elif cmd == 'zero':
+            print("[VOICE][DEBUG] Ignoring 'zero' in --debug.")
+            return
+        elif cmd == 'start':
+            print("[VOICE][DEBUG] Ignoring 'start' in --debug.")
+            return
+        # Any other commands: ignore silently in debug
+        return
+
+    # ----------------------------------------------------------------------
+    # NORMAL MODE (non-debug): original behavior
+    # ----------------------------------------------------------------------
     if cmd == 'preset':
         if arg in rom_test:
             set_kpt_preset(args, arg)
@@ -267,10 +298,10 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
                 reset_auto_rom_state(state)
             state.first_auto_arm_consumed = False
             state.last_zero_source = 'auto'
-            print(f"[AUTO-ZERO] Armed for previous preset '{args.rom_test}'.")
+            print(f"[AUTO-ZERO] Armed for prev preset '{args.rom_test}'.")
 
     elif cmd == 'zero':
-        if np.isfinite(state.current_raw_angle):
+        if (state is not None) and np.isfinite(state.current_raw_angle):
             state.baseline_deg = float(state.current_raw_angle)
             state.baseline_set_ts = time.time()
             state.angle_series.clear()
@@ -297,7 +328,6 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
             state.arm_after_baseline = False
             state.first_auto_arm_consumed = True  # consume auto-first
             print("[ROM] Armed for a single repetition. Move when ready.")
-
 
 # ----------------------------
 # Optional CLI helpers

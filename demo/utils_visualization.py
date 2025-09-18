@@ -289,12 +289,17 @@ def _compose_gallery(panel_imgs, cols=1, cell_w=560, pad=16, bg=(18, 18, 18)):
 # ---------- Show & Save (single / gallery) ----------
 
 def show_and_save_result_panel(args, state, result: dict):
+
     """
     Compose and save ROM_PANEL.png into the trial dir.
     If --show and --show-result:
       - single: one window showing the latest panel
       - gallery: one window showing a grid of the last N panels
     """
+
+    if getattr(args, 'debug', False):
+        return
+
     test_name = result.get('test_name', getattr(args, 'rom_test', 'unknown'))
     status = result.get('status', 'ok')
     session_stamp = getattr(state, 'session_stamp', None) or time.strftime("%Y%m%d_%H%M%S")

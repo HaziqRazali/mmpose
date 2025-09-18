@@ -112,8 +112,8 @@ def process_one_image(
             state.baseline_deg = None
             state.baseline_set_ts = None
         elif args.rom_test != state.active_rom:
-            # finalize ongoing trial first (if any)
-            if args.auto_rom and state.trial_active:
+            # finalize ongoing trial first (if any) — but NEVER in --debug
+            if (not args.debug) and args.auto_rom and state.trial_active:
                 finalize_rom_trial(args, state, time.time(), mmcv.rgb2bgr(color_img_rgb.copy()), combined_bgr=None)
             state.active_rom = args.rom_test
             state.last_angle = None
@@ -209,7 +209,7 @@ def process_one_image(
     # ---------------------------------
     autozero_line = None  # status line for the text strip
 
-    if is_angle_mode and state.auto_zero_pending:
+    if is_angle_mode and (not args.debug) and state.auto_zero_pending:
         if state.auto_zero_start_time is None:
             if np.isfinite(state.current_raw_angle):
                 state.auto_zero_start_time = t_now
@@ -267,7 +267,7 @@ def process_one_image(
     # ---------------------------------
     # 5) Auto-ROM core
     # ---------------------------------
-    if args.auto_rom and is_angle_mode and np.isfinite(angle_disp):
+    if (not args.debug) and args.auto_rom and is_angle_mode and np.isfinite(angle_disp):
         if state.filt_angle is None:
             state.filt_angle = float(angle_disp)
             state.prev_filt_angle = float(angle_disp)
@@ -377,7 +377,8 @@ def process_one_image(
     combined_bgr = np.vstack(rows)
 
     # Attach HUD frame to the just-locked extremum, if any
-    attach_locked_frame_if_pending(state, combined_bgr)
+    if not args.debug:
+        attach_locked_frame_if_pending(state, combined_bgr)
 
     # 10) Voice + hotkeys
     if voice:
@@ -392,34 +393,35 @@ def process_one_image(
         key = cv2.pollKey() if hasattr(cv2, "pollKey") else cv2.waitKey(1)
         handle_hotkeys_for_presets(args, key)
 
-        # Manual baseline zero via 'b'
-        if key == ord("b"):
-            if np.isfinite(state.current_raw_angle):
-                state.baseline_deg = float(state.current_raw_angle)
-                state.baseline_set_ts = time.time()
-                state.angle_series.clear()
-                state.last_angle = None
-                state.auto_zero_pending = False
-                state.auto_zero_start_time = None
-                state.auto_zero_buffer.clear()
-                reset_auto_rom_state(state, keep_trial_ready=False)
-                state.trial_armed = False
-                state.first_auto_arm_consumed = True
-                state.last_zero_source = "manual"
-                print(f"[KPT] Baseline set to {state.baseline_deg:.2f}°")
-            else:
-                print("[KPT] Cannot zero: no valid angle this frame.")
+        if not args.debug:
+            # Manual baseline zero via 'b'
+            if key == ord("b"):
+                if np.isfinite(state.current_raw_angle):
+                    state.baseline_deg = float(state.current_raw_angle)
+                    state.baseline_set_ts = time.time()
+                    state.angle_series.clear()
+                    state.last_angle = None
+                    state.auto_zero_pending = False
+                    state.auto_zero_start_time = None
+                    state.auto_zero_buffer.clear()
+                    reset_auto_rom_state(state, keep_trial_ready=False)
+                    state.trial_armed = False
+                    state.first_auto_arm_consumed = True
+                    state.last_zero_source = "manual"
+                    print(f"[KPT] Baseline set to {state.baseline_deg:.2f}°")
+                else:
+                    print("[KPT] Cannot zero: no valid angle this frame.")
 
-        # Arm start via 's'
-        if key == ord("s"):
-            if state.baseline_deg is None:
-                state.arm_after_baseline = True
-                print("[ROM] Start queued. Will arm as soon as baseline locks.")
-            else:
-                state.trial_armed = True
-                state.arm_after_baseline = False
-                state.first_auto_arm_consumed = True
-                print("[ROM] Armed for a single repetition. Move when ready.")
+            # Arm start via 's'
+            if key == ord("s"):
+                if state.baseline_deg is None:
+                    state.arm_after_baseline = True
+                    print("[ROM] Start queued. Will arm as soon as baseline locks.")
+                else:
+                    state.trial_armed = True
+                    state.arm_after_baseline = False
+                    state.first_auto_arm_consumed = True
+                    print("[ROM] Armed for a single repetition. Move when ready.")
 
         if args.show_interval > 0:
             time.sleep(args.show_interval)
@@ -427,7 +429,7 @@ def process_one_image(
         key = -1
 
     # 11) Finalize (after HUD is drawn so saved frames include it)
-    if args.auto_rom and is_angle_mode:
+    if (not args.debug) and args.auto_rom and is_angle_mode:
         finalize_rom_trial(args, state, t_now, frame_bgr, combined_bgr)
 
     return data_samples.get("pred_instances", None), key, combined_bgr
@@ -504,6 +506,16 @@ def main():
 
     # Voice args
     add_voice_args(parser)
+
+    # ---- DEBUG MODE ---------------------------------------------------------
+    # Display-only: still runs detection/pose/angle + HUD,
+    # but disables baseline/arming/locking/finalize/saving completely.
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Display-only: compute angles & draw HUD; disable ROM tracking and all saving."
+    )
 
     # AUTO-ROM thresholds
     parser.add_argument("--auto-rom", action="store_true", help="Auto-detect min/max/ROM, save images + JSON")

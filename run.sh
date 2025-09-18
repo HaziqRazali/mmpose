@@ -92,8 +92,7 @@ python demo/topdown_demo_with_mmdet.py \
   --rom-baseline-tol 12 \
   --rom-baseline-hold-sec 0.5 \
   --rom-timeout-sec 25 \
-  --plot-seconds 0 \
-  --zero-mode
+  --plot-seconds 0
 
 # video
 python demo/topdown_demo_with_mmdet.py \

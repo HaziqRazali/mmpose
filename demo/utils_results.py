@@ -23,6 +23,10 @@ def finalize_rom_trial(args, state: SessionState, t_now, frame_bgr, combined_bgr
     Returns:
         result (dict) if finalized, else None
     """
+    # In DEBUG mode we never persist or finalize anything
+    if getattr(args, 'debug', False):
+        return None
+
     # Not active → nothing to do
     if not state.trial_active:
         return None
