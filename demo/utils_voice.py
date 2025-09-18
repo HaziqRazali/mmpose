@@ -166,7 +166,15 @@ class VoiceController:
         self.last_heard = text
         print(f"[VOICE-FINAL] {text}")
 
-        # Preset names
+        # Preset names (STRICT-FIRST, then FALLBACK)
+        # 1) Strict: require ALL tokens from the preset name to appear as whole words.
+        #    e.g., "left shoulder abduction" must contain 'left' 'shoulder' 'abduction'.
+        for preset_name in VOICE_PRESET_ALIASES.keys():
+            toks = preset_name.split('_')  # ['left','shoulder','abduction']
+            if all(re.search(rf"\b{re.escape(tok)}\b", text) for tok in toks):
+                self.q.put(('preset', preset_name)); return
+
+        # 2) Fallback: accept looser aliases (side+joint only, flexible gaps, etc.)
         for preset_name, patterns in VOICE_PRESET_ALIASES.items():
             if _match_any(text, patterns):
                 self.q.put(('preset', preset_name)); return
