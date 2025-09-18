@@ -290,6 +290,7 @@ def process_one_image(
 
     # Angle after baseline subtraction (if any)
     angle_disp = _rel_angle_deg(state, angle_t)
+    angle_disp = abs(angle_disp) if (args.abs_angle and np.isfinite(angle_disp)) else angle_disp
 
     # ---------------------------------
     # 5) Auto-ROM core
@@ -469,6 +470,9 @@ def mouse_callback(event, x, y, flags, param):
 
 def main():
     parser = ArgumentParser()
+
+    parser.add_argument("--abs-angle", action="store_true", help="Use |angle - baseline| for ROM (peaks become MAX).")
+
     parser.add_argument("det_config")
     parser.add_argument("det_checkpoint")
     parser.add_argument("pose_config")
@@ -527,7 +531,7 @@ def main():
                         help="How many recent panels to keep in gallery (max items).")
     parser.add_argument("--gallery-cols", type=int, default=1,
                         help="Number of columns in gallery grid.")
-    parser.add_argument("--gallery-cell-width", type=int, default=560,
+    parser.add_argument("--gallery-cell-width", type=int, default=800,
                         help="Target width per panel cell in gallery (px).")
 
     # Voice args

@@ -83,17 +83,18 @@ python demo/topdown_demo_with_mmdet.py \
   --voice --voice-mic "default" \
   --output-root out \
   --auto-rom \
-  --rom-v-go 30 \
+  --rom-v-go 20 \
   --rom-v-stop 10 \
   --rom-hold-sec 0.6 \
-  --rom-std-max 1.5 \
+  --rom-std-max 4.0 \
   --rom-min-amplitude 15 \
   --rom-start-amp 8 \
   --rom-baseline-tol 12 \
   --rom-baseline-hold-sec 0.5 \
   --rom-timeout-sec 25 \
   --plot-seconds 0 \
-  --zero \
+  --zero --abs-angle
+
   --debug
 
 # video

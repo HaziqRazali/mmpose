@@ -82,19 +82,17 @@ def _build_voice_aliases_from_rom(rom_test_dict):
 VOICE_PRESET_ALIASES = _build_voice_aliases_from_rom(rom_test)
 
 VOICE_COMMAND_PATTERNS = {
-    "next":  [r"\bnext\b", r"\bforward\b", r"\bgo next\b"],
-    "prev":  [r"\bprevious\b", r"\bback\b", r"\bgo back\b"],
-    "zero":  [r"\bzero\b", r"\brezero\b", r"\breset baseline\b", r"\bset baseline\b", r"\bcalibrate\b"],
-    "start": [r"\bstart\b", r"\bbegin\b", r"\bgo\b", r"\bstart test\b", r"\brecord\b"],
+    #"next":  [r"\bnext\b", r"\bforward\b", r"\bgo next\b"],
+    #"prev":  [r"\bprevious\b", r"\bback\b", r"\bgo back\b"],
+    #"zero":  [r"\bzero\b", r"\brezero\b", r"\breset baseline\b", r"\bset baseline\b", r"\bcalibrate\b"],
+    #"start": [r"\bstart\b", r"\bbegin\b", r"\bgo\b", r"\bstart test\b", r"\brecord\b"],
 }
-
 
 def _match_any(text: str, patterns):
     for p in patterns:
         if re.search(p, text):
             return True
     return False
-
 
 # ----------------------------
 # Voice engine wrapper
@@ -355,16 +353,16 @@ def apply_voice_command(args, state, cmd_tuple, reset_auto_rom_state=None):
         else:
             print("[VOICE] Cannot zero: no valid angle this frame.")
 
-    elif cmd == 'start':
-        # unchanged: allows arming in non-debug
-        if state.baseline_deg is None and args.zero:
-            state.arm_after_baseline = True
-            print("[ROM] Start queued. Will arm as soon as baseline locks.")
-        else:
-            state.trial_armed = True
-            state.arm_after_baseline = False
-            state.first_auto_arm_consumed = True
-            print("[ROM] Armed for a single repetition. Move when ready.")
+    # elif cmd == 'start':
+    #     # unchanged: allows arming in non-debug
+    #     if state.baseline_deg is None and args.zero:
+    #         state.arm_after_baseline = True
+    #         print("[ROM] Start queued. Will arm as soon as baseline locks.")
+    #     else:
+    #         state.trial_armed = True
+    #         state.arm_after_baseline = False
+    #         state.first_auto_arm_consumed = True
+    #         print("[ROM] Armed for a single repetition. Move when ready.")
 
 # ----------------------------
 # Optional CLI helpers

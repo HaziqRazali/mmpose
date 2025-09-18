@@ -75,9 +75,9 @@ rom_test = {
 
     # shoulder
     "left_shoulder_flexion":        [11,5,7],
-    "right_shoulder_flexion":       [12,6,8],
+    "right_shoulder_flexion":       [8,6,12],
     "left_shoulder_abduction":      [11,5,7],
-    "right_shoulder_abduction":     [12,6,8],
+    "right_shoulder_abduction":     [8,6,12],
     "left_shoulder_external_rotation":  [7,5,9],
     "right_shoulder_external_rotation": [8,6,10],
     "left_shoulder_internal_rotation":  [7,5,9],
