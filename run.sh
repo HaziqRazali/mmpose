@@ -77,7 +77,9 @@ python demo/topdown_demo_with_mmdet.py \
   configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
   https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
   --input "realsense" \
-  --show --show-result \
+  --show \
+  --show-result \
+  --panel-window gallery \
   --voice --voice-mic "default" \
   --output-root out \
   --auto-rom \
@@ -90,7 +92,8 @@ python demo/topdown_demo_with_mmdet.py \
   --rom-baseline-tol 12 \
   --rom-baseline-hold-sec 0.5 \
   --rom-timeout-sec 25 \
-  --plot-seconds 0
+  --plot-seconds 0 \
+  --zero-mode
 
 # video
 python demo/topdown_demo_with_mmdet.py \

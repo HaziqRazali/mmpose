@@ -4,7 +4,7 @@
 # - Top-down pose estimation (mmpose)
 # - ROM auto-baseline (auto-zero) + auto-ROM min/max pairing
 # - HUD as separate strips (text + optional sparkline) under the video
-# - Voice control (Azure Speech) for presets / start / zero / next / prev
+# - Voice control for presets / start / zero / next / prev
 #
 # Layout:
 #   [ video frame ]
@@ -22,7 +22,6 @@ import mmengine
 import numpy as np
 
 from argparse import ArgumentParser
-from collections import deque
 
 from mmengine.logging import print_log
 from mmpose.apis import inference_topdown
@@ -127,8 +126,6 @@ def process_one_image(
 
     # Draw pose (no HUD text here — we keep video clean)
     if visualizer is not None:
-        # NOTE: Some versions of Visualizer accept only (name, image, data_sample=...).
-        # Your local visualizer supports (name, color_img_rgb, depth_img, data_sample=...).
         visualizer.add_datasample(
             "result",
             color_img_rgb,
@@ -454,7 +451,7 @@ def main():
         "--show-result",
         action="store_true",
         default=False,
-        help="Pop a separate ROM panel window & save ROM_PANEL.png on finalize (requires --show).",
+        help="Pop a ROM panel window & save ROM_PANEL.png on finalize (requires --show).",
     )
     parser.add_argument("--output-root", type=str, default="")
     parser.add_argument("--save-predictions", action="store_true", default=False)
@@ -494,6 +491,16 @@ def main():
         choices=["dark", "light"],
         help="Background mode for the HUD text strip.",
     )
+
+    # Panel view mode: single (default) or gallery
+    parser.add_argument("--panel-window", choices=["single", "gallery"], default="single",
+                        help="single: one latest result window; gallery: one window showing a grid of recent results.")
+    parser.add_argument("--gallery-size", type=int, default=4,
+                        help="How many recent panels to keep in gallery (max items).")
+    parser.add_argument("--gallery-cols", type=int, default=1,
+                        help="Number of columns in gallery grid.")
+    parser.add_argument("--gallery-cell-width", type=int, default=560,
+                        help="Target width per panel cell in gallery (px).")
 
     # Voice args
     add_voice_args(parser)
@@ -550,7 +557,7 @@ def main():
             model=dict(
                 test_cfg=dict(
                     output_heatmaps=args.draw_heatmap,
-                    flip_test=False,  # <— speed-up
+                    flip_test=False,  # speed-up
                 )
             )
         ),
@@ -671,7 +678,7 @@ def main():
 
     if output_file:
         input_type_print = input_type.replace("webcam", "video")
-        print_log(f"the output {input_type_print} has been saved at {output_file}", logger="current", level=logging.INFO)
+        print_log(f'the output {input_type_print} has been saved at {output_file}', logger="current", level=logging.INFO)
 
 
 if __name__ == "__main__":

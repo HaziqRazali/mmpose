@@ -2,10 +2,14 @@
 # Centralized visualization utilities:
 # - real-time HUD sparkline (render_sparkline_strip)
 # - ROM result panel (compose_result_panel + show_and_save_result_panel)
+# - gallery compositor (compose_gallery)
 # - small internal helpers for image/text layout
 
 import os
 import time
+import math
+from collections import deque
+
 import numpy as np
 import cv2
 import mmcv
@@ -52,6 +56,14 @@ def _crop_bottom(img, crop_px: int):
     cp = min(max(int(crop_px), 0), max(h - 1, 0))
     return img[:h - cp, :, :]
 
+def _resize_keep_aspect(img, target_w):
+    h, w = img.shape[:2]
+    if w == target_w:
+        return img
+    scale = target_w / float(w)
+    target_h = int(round(h * scale))
+    return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
 # ---------- HUD: real-time sparkline ----------
 
 def render_sparkline_strip(width, height, series, t_now, window_sec, label_text=None, gap_sec=0.4):
@@ -80,8 +92,8 @@ def render_sparkline_strip(width, height, series, t_now, window_sec, label_text=
     ys = [a for (_, a) in filtered]
 
     y_min, y_max = float(np.min(ys)), float(np.max(ys))
-    if not np.isfinite(y_min) or not np.isfinite(y_max) or abs(y_max - y_min) < 1e-9:
-        y_min, y_max = (0.0, 1.0) if not np.isfinite(y_min) or not np.isfinite(y_max) else (y_min - 1.0, y_max + 1.0)
+    if (not np.isfinite(y_min)) or (not np.isfinite(y_max)) or abs(y_max - y_min) < 1e-9:
+        y_min, y_max = (0.0, 1.0) if (not np.isfinite(y_min) or not np.isfinite(y_max)) else (y_min - 1.0, y_max + 1.0)
 
     cv2.rectangle(strip, (0, 0), (width - 1, height - 1), (32, 32, 32), thickness=-1)
     cv2.rectangle(strip, (0, 0), (width - 1, height - 1), (180, 180, 180), thickness=1)
@@ -215,7 +227,7 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
 
     # Title (ASCII hyphen to avoid '???')
     title = f"{test_name} - {status.upper()}"
-    _text(panel, title, (pad, int(title_h * 0.7)), 1.2, (255, 255, 255), 2)
+    _text(panel, title, (16, int(title_h * 0.7)), 1.2, (255, 255, 255), 2)
 
     # Place row
     panel[title_h:title_h + row.shape[0], 0:W, :] = row
@@ -223,14 +235,65 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
     # Footer: ROM only, larger text
     rom_txt = "--.-" if rom_deg is None else f"{rom_deg:.1f}"
     footer = f"ROM: {rom_txt} deg"
-    _text(panel, footer, (pad, title_h + row.shape[0] + int(footer_h * 0.8)), 1.1, (255, 255, 255), 2)
+    _text(panel, footer, (16, title_h + row.shape[0] + int(footer_h * 0.8)), 1.1, (255, 255, 255), 2)
 
     return panel
+
+# ---------- Gallery (collage of recent panels) ----------
+
+def _compose_gallery(panel_imgs, cols=1, cell_w=560, pad=16, bg=(18, 18, 18)):
+    """
+    Build a collage from a list of panel images (BGR).
+    - cols: desired columns (>=1). Canvas width adapts to the actual #items in each row,
+            so there is no extra black area when the last row is partially filled.
+    - cell_w: target width per cell (images are resized preserving aspect).
+    """
+    if not panel_imgs:
+        return np.full((360, 640, 3), bg, dtype=np.uint8)
+
+    # Resize all to cell_w keeping aspect
+    cells = [_resize_keep_aspect(im, cell_w) for im in panel_imgs]
+    n = len(cells)
+    cols = max(1, int(cols))
+    rows = int(math.ceil(n / cols))
+
+    # Per-row max height & actual row widths (no padding at row end)
+    row_heights, row_widths = [], []
+    for r in range(rows):
+        used = min(cols, n - r * cols)               # how many items in this row
+        hmax = max(cells[r * cols + c].shape[0] for c in range(used))
+        wsum = sum(cells[r * cols + c].shape[1] for c in range(used)) + pad * (used - 1 if used > 1 else 0)
+        row_heights.append(hmax)
+        row_widths.append(wsum)
+
+    total_h = sum(row_heights) + pad * (rows - 1 if rows > 1 else 0)
+    total_w = max(row_widths)                        # fit to the widest actual row (no extra black)
+
+    canvas = np.full((total_h, total_w, 3), bg, dtype=np.uint8)
+
+    # Blit cells row by row, spacing with pad but no trailing gap
+    y = 0
+    for r in range(rows):
+        used = min(cols, n - r * cols)
+        x = 0
+        for c in range(used):
+            cell = cells[r * cols + c]
+            h, w = cell.shape[:2]
+            y_off = (row_heights[r] - h) // 2        # vertical centering within the row slot
+            canvas[y + y_off:y + y_off + h, x:x + w, :] = cell
+            x += w + (pad if c < used - 1 else 0)    # no pad after last in row
+        y += row_heights[r] + (pad if r < rows - 1 else 0)
+
+    return canvas
+
+# ---------- Show & Save (single / gallery) ----------
 
 def show_and_save_result_panel(args, state, result: dict):
     """
     Compose and save ROM_PANEL.png into the trial dir.
-    Optional popup if --show and --show-result are set.
+    If --show and --show-result:
+      - single: one window showing the latest panel
+      - gallery: one window showing a grid of the last N panels
     """
     test_name = result.get('test_name', getattr(args, 'rom_test', 'unknown'))
     status = result.get('status', 'ok')
@@ -260,19 +323,66 @@ def show_and_save_result_panel(args, state, result: dict):
     mmcv.imwrite(panel, panel_path)
     print(f"[ROM] Panel saved: {panel_path}")
 
-    if getattr(args, 'show', False) and getattr(args, 'show_result', False):
-        win = f"ROM Result - {test_name}"  # ASCII hyphen
-        if getattr(state, 'result_window_name', None):
+    # UI
+    if not (getattr(args, 'show', False) and getattr(args, 'show_result', False)):
+        return panel_path
+
+    mode = getattr(args, 'panel_window', 'single')
+
+    if mode == 'single':
+        win = f"ROM Result - {test_name}"
+        # close previous panel window if any (regardless of previous mode)
+        prev_win = getattr(state, 'result_window_name', None)
+        if prev_win and prev_win != win:
             try:
-                cv2.destroyWindow(state.result_window_name)
+                cv2.destroyWindow(prev_win)
             except Exception:
                 pass
         state.result_window_name = win
+
         cv2.namedWindow(win, cv2.WINDOW_NORMAL)
         target_w = min(1280, panel.shape[1])
         scale = target_w / float(panel.shape[1])
         target_h = int(panel.shape[0] * scale)
         cv2.resizeWindow(win, target_w, target_h)
         cv2.imshow(win, panel)
+        return panel_path
+
+    # ----- gallery mode -----
+    # Keep deque of recent panel paths on state
+    if not hasattr(state, 'gallery_paths') or state.gallery_paths is None:
+        state.gallery_paths = deque(maxlen=max(1, int(getattr(args, 'gallery_size', 4))))
+    else:
+        # Update maxlen if changed
+        desired_len = max(1, int(getattr(args, 'gallery_size', 4)))
+        if state.gallery_paths.maxlen != desired_len:
+            # rebuild with new maxlen
+            items = list(state.gallery_paths)
+            state.gallery_paths = deque(items[-desired_len:], maxlen=desired_len)
+
+    state.gallery_paths.append(panel_path)
+
+    # Load last N panels and compose
+    paths = list(state.gallery_paths)
+    imgs = [ _load_img(p) for p in paths ]
+    cols = max(1, int(getattr(args, 'gallery_cols', 2)))
+    cell_w = max(240, int(getattr(args, 'gallery_cell_width', 560)))
+    gallery = _compose_gallery(imgs, cols=cols, cell_w=cell_w, pad=16, bg=(18, 18, 18))
+
+    win = "ROM Gallery"
+    prev_win = getattr(state, 'result_window_name', None)
+    if prev_win and prev_win != win:
+        try:
+            cv2.destroyWindow(prev_win)
+        except Exception:
+            pass
+    state.result_window_name = win
+
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    target_w = min(1400, gallery.shape[1])
+    scale = target_w / float(gallery.shape[1])
+    target_h = int(gallery.shape[0] * scale)
+    cv2.resizeWindow(win, target_w, target_h)
+    cv2.imshow(win, gallery)
 
     return panel_path
