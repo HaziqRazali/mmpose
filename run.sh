@@ -93,8 +93,7 @@ python demo/topdown_demo_with_mmdet.py \
   --rom-baseline-hold-sec 0.5 \
   --rom-timeout-sec 25 \
   --plot-seconds 0 \
-  --zero --abs-angle
-
+  --zero --abs-angle \
   --debug
 
 # video
@@ -103,8 +102,8 @@ demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
 https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
 configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
 https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
---input "/home/haziq/datasets/telept/recordings_from_brett/video-20250711-175311-72cee329.mov" \
---output-root vis_results/ --save-predictions
+--input "/home/haziqmr/Downloads/Pathological_movements.mov" \
+--output-root vis_results/ --save-predictions --debug
 
 # rtmw-l_8xb320-270e_cocktail14-384x288
 python demo/topdown_demo_with_mmdet.py \
