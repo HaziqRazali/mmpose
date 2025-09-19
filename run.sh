@@ -47,6 +47,28 @@ python demo/topdown_demo_with_mmdet.py \
   --rom-baseline-hold-sec 0.5 \
   --rom-timeout-sec 25 \
   --plot-seconds 0
+
+# home desktop + realsense
+python demo/topdown_demo_with_mmdet.py \
+  demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
+  configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
+  --input realsense \
+  --show \
+  --voice --voice-mic "plughw:CARD=L1080p,DEV=0" \
+  --output-root out \
+  --auto-rom \
+  --rom-v-go 30 \
+  --rom-v-stop 10 \
+  --rom-hold-sec 0.6 \
+  --rom-std-max 1.5 \
+  --rom-min-amplitude 15 \
+  --rom-start-amp 8 \
+  --rom-baseline-tol 12 \
+  --rom-baseline-hold-sec 0.5 \
+  --rom-timeout-sec 25 \
+  --plot-seconds 0
   
 # astar aftershock laptop + creative
 python demo/topdown_demo_with_mmdet.py \
