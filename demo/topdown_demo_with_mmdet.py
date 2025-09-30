@@ -30,6 +30,7 @@ from utils_3d import (
     angle_from_vecpair,
 )
 from utils_filters import make_filter_1d
+from utils_visualization import draw_rom_lines
 import pyrealsense2 as rs
 
 
@@ -206,7 +207,7 @@ def _append_and_disp_from_buf(buf, ang, src):
 
 def process_one_image(args, color_img, depth_img, detector, pose_estimator, visualizer=None, show_interval=0):
     """
-    Detector -> pose -> draw skeleton (+ live angle text with 3D/2D tag).
+    Detector -> pose -> draw skeleton or ROM lines (+ live angle text with 3D/2D tag).
     Returns (pred_instances, key_code, frame_bgr, joint_xyz_top_or_None).
     """
     init_default_scope('mmdet')
@@ -226,7 +227,11 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
     else:
         color_img_rgb = mmcv.imread(color_img, channel_order="rgb")
 
-    if visualizer is not None:
+    # Visualization branch:
+    # - if --only-rom-lines and mode not in {133, full_body}, skip visualizer
+    # - else use normal visualizer (skeleton, joints, etc.)
+    use_rom_only = bool(getattr(args, "only_rom_lines", False)) and (args.rom_test not in ("133", "full_body"))
+    if (visualizer is not None) and (not use_rom_only):
         visualizer.add_datasample(
             "result",
             color_img_rgb,
@@ -271,7 +276,20 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                 print(f"[WARN] 3D back-projection failed: {e}")
                 joint_xyz_top = None
 
-    # Live angle text on Pose window for vector-pairs
+    # If ROM-only mode, draw only the vectors used for the current preset
+    if use_rom_only:
+        if (kpts_xy_top is not None) and (kpt_scores_top is not None):
+            vecpairs = get_vectors_for_preset(args.rom_test)
+            frame_bgr = draw_rom_lines(
+                frame_bgr,
+                kpts_xy_top[:, :2],
+                kpt_scores_top,
+                vecpairs,
+                kpt_thr=args.kpt_thr,
+                thickness=args.thickness,
+            )
+
+    # Live angle text on Pose window for vector-pairs (unchanged)
     vecpairs = get_vectors_for_preset(args.rom_test)
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -384,6 +402,11 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.8)
     parser.add_argument("--draw-bbox", action="store_true")
     parser.add_argument("--rom_test", default="full_body")
+
+    # New flag: ROM-only visualization
+    parser.add_argument("--only-rom-lines", dest="only_rom_lines", action="store_true",
+                        help="If set, hide skeleton for specific ROM tests and draw only the two ROM vectors.")
+    parser.set_defaults(only_rom_lines=False)
 
     # --- depth back-projection args ---
     parser.add_argument("--depth-win", type=int, default=3, help="Depth window size (odd).")
@@ -529,11 +552,12 @@ def main():
                 src = snapA["src"] if (snapA["src"] == snapB["src"]) else "mixed"
             else:
                 # fallback to recompute
+                from_this = vecpairs[0]
                 angA, srcA = _angle_from_vecpair_auto(
-                    snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], vecpairs[0], args.kpt_thr
+                    snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], from_this, args.kpt_thr
                 )
                 angB, srcB = _angle_from_vecpair_auto(
-                    snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], vecpairs[0], args.kpt_thr
+                    snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], from_this, args.kpt_thr
                 )
                 if angA is None or angB is None:
                     val = None; src = None

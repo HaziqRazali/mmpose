@@ -3,6 +3,7 @@
 # - real-time HUD sparkline (render_sparkline_strip)
 # - ROM result panel (compose_result_panel + show_and_save_result_panel)
 # - gallery compositor (compose_gallery)
+# - ROM-only line drawer for angle visualization (draw_rom_lines)
 # - small internal helpers for image/text layout
 
 import os
@@ -63,6 +64,87 @@ def _resize_keep_aspect(img, target_w):
     scale = target_w / float(w)
     target_h = int(round(h * scale))
     return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+# ---------- NEW: ROM-only line drawing ----------
+
+def _resolve_point_2d_with_scores(keypoints_xy, scores, idx, kpt_thr):
+    """
+    Return (x,y) if score ok, else None.
+    idx may be int or [int,int] for midpoint. For list longer than 2, use mean of all valid.
+    """
+    if keypoints_xy is None or scores is None:
+        return None
+    K = int(len(keypoints_xy))
+    def _one(i):
+        try:
+            j = int(i)
+            if j < 0 or j >= K:
+                return None
+            if float(scores[j]) < float(kpt_thr):
+                return None
+            p = np.asarray(keypoints_xy[j], dtype=float)[:2]
+            if not np.all(np.isfinite(p)):
+                return None
+            return p
+        except Exception:
+            return None
+
+    if isinstance(idx, (list, tuple)):
+        pts = [p for p in (_one(i) for i in idx) if p is not None]
+        if not pts:
+            return None
+        p = np.mean(np.vstack(pts), axis=0)
+        return (int(round(p[0])), int(round(p[1])))
+    p = _one(idx)
+    if p is None:
+        return None
+    return (int(round(p[0])), int(round(p[1])))
+
+def _normalize_vecpairs(preset):
+    """
+    Normalize get_vectors_for_preset output to a list of vector-pairs:
+      [ [[P0,P1],[Q0,Q1]], ... ]
+    Accepts single pair or left/right pair.
+    """
+    if preset is None:
+        return []
+    # if it looks like [[p0,p1],[q0,q1]]
+    if len(preset) == 2 and not isinstance(preset[0][0], (list, tuple)):
+        return [preset]
+    # else assume already a list of pairs (e.g., left/right)
+    return list(preset)
+
+def draw_rom_lines(frame_bgr, keypoints_xy, scores, preset, kpt_thr=0.3, thickness=2,
+                   color_vec1=(0, 255, 0), color_vec2=(255, 255, 0)):
+    """
+    Draw only the ROM vectors used for angle computation on a BGR frame.
+    - frame_bgr: np.ndarray (BGR). Modified and also returned.
+    - keypoints_xy: (K,2)
+    - scores: (K,)
+    - preset: e.g. [[5,7], [[5,6],[11,12]]] or [ [[5,7],[[5,6],[11,12]]], [[...] , [...]] ] for L/R
+    """
+    if frame_bgr is None:
+        return frame_bgr
+    pairs = _normalize_vecpairs(preset)
+    if not pairs:
+        return frame_bgr
+
+    for pair in pairs:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        vec1, vec2 = pair
+        # vec1 = [P0,P1]; vec2 = [Q0,Q1]; entries may themselves be lists for midpoints
+        B = _resolve_point_2d_with_scores(keypoints_xy, scores, vec1[0], kpt_thr)
+        A = _resolve_point_2d_with_scores(keypoints_xy, scores, vec1[1], kpt_thr)
+        C0 = _resolve_point_2d_with_scores(keypoints_xy, scores, vec2[0], kpt_thr)
+        C1 = _resolve_point_2d_with_scores(keypoints_xy, scores, vec2[1], kpt_thr)
+
+        if B is not None and A is not None:
+            cv2.line(frame_bgr, B, A, color_vec1, int(thickness), cv2.LINE_AA)
+        if C0 is not None and C1 is not None:
+            cv2.line(frame_bgr, C0, C1, color_vec2, int(thickness), cv2.LINE_AA)
+
+    return frame_bgr
 
 # ---------- HUD: real-time sparkline ----------
 
@@ -157,12 +239,9 @@ def render_text_strip(
     fg_default = (255, 255, 255) if bg_mode == "dark" else (32, 32, 32)
     strip = np.full((height, width, 3), bg, dtype=np.uint8)
 
-    # Measure text height/baseline, compute comfortable line height
     (w0, h0), base0 = cv2.getTextSize("Hg", cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
     line_h = h0 + base0 + 2
     total_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-
-    # Center block vertically with top padding
     y0 = max(line_h, (height - total_h) // 2 + h0)
 
     for i, item in enumerate(lines):
@@ -197,7 +276,7 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
     crop_bottom_px: crop HUD/sparkline from the bottom of each MIN/MAX image.
     """
     title_h = 64
-    footer_h = 48  # taller to allow bigger ROM text
+    footer_h = 48
     pad = 16
     card_w = 640
     card_h = 360
@@ -211,7 +290,6 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
 
     min_card = min_img.copy()
     max_card = max_img.copy()
-    # Use ASCII " deg" to avoid glyph issues
     min_txt = "--.-" if min_deg is None else f"{min_deg:.1f}"
     max_txt = "--.-" if max_deg is None else f"{max_deg:.1f}"
     _text(min_card, f"MIN: {min_txt} deg", (12, 28), 0.9, (0, 255, 255), 2)
@@ -225,14 +303,11 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
     H = title_h + row.shape[0] + footer_h + pad * 2
     panel = np.full((H, W, 3), (18, 18, 18), dtype=np.uint8)
 
-    # Title (ASCII hyphen to avoid '???')
     title = f"{test_name} - {status.upper()}"
     _text(panel, title, (16, int(title_h * 0.7)), 1.2, (255, 255, 255), 2)
 
-    # Place row
     panel[title_h:title_h + row.shape[0], 0:W, :] = row
 
-    # Footer: ROM only, larger text
     rom_txt = "--.-" if rom_deg is None else f"{rom_deg:.1f}"
     footer = f"ROM: {rom_txt} deg"
     _text(panel, footer, (16, title_h + row.shape[0] + int(footer_h * 0.8)), 1.1, (255, 255, 255), 2)
@@ -244,34 +319,30 @@ def compose_result_panel(test_name, status, session_stamp, trial_dir,
 def _compose_gallery(panel_imgs, cols=1, cell_w=560, pad=16, bg=(18, 18, 18)):
     """
     Build a collage from a list of panel images (BGR).
-    - cols: desired columns (>=1). Canvas width adapts to the actual #items in each row,
-            so there is no extra black area when the last row is partially filled.
-    - cell_w: target width per cell (images are resized preserving aspect).
+    - cols: desired columns (>=1)
+    - cell_w: target width per cell
     """
     if not panel_imgs:
         return np.full((360, 640, 3), bg, dtype=np.uint8)
 
-    # Resize all to cell_w keeping aspect
     cells = [_resize_keep_aspect(im, cell_w) for im in panel_imgs]
     n = len(cells)
     cols = max(1, int(cols))
     rows = int(math.ceil(n / cols))
 
-    # Per-row max height & actual row widths (no padding at row end)
     row_heights, row_widths = [], []
     for r in range(rows):
-        used = min(cols, n - r * cols)               # how many items in this row
+        used = min(cols, n - r * cols)
         hmax = max(cells[r * cols + c].shape[0] for c in range(used))
         wsum = sum(cells[r * cols + c].shape[1] for c in range(used)) + pad * (used - 1 if used > 1 else 0)
         row_heights.append(hmax)
         row_widths.append(wsum)
 
     total_h = sum(row_heights) + pad * (rows - 1 if rows > 1 else 0)
-    total_w = max(row_widths)                        # fit to the widest actual row (no extra black)
+    total_w = max(row_widths)
 
     canvas = np.full((total_h, total_w, 3), bg, dtype=np.uint8)
 
-    # Blit cells row by row, spacing with pad but no trailing gap
     y = 0
     for r in range(rows):
         used = min(cols, n - r * cols)
@@ -279,9 +350,9 @@ def _compose_gallery(panel_imgs, cols=1, cell_w=560, pad=16, bg=(18, 18, 18)):
         for c in range(used):
             cell = cells[r * cols + c]
             h, w = cell.shape[:2]
-            y_off = (row_heights[r] - h) // 2        # vertical centering within the row slot
+            y_off = (row_heights[r] - h) // 2
             canvas[y + y_off:y + y_off + h, x:x + w, :] = cell
-            x += w + (pad if c < used - 1 else 0)    # no pad after last in row
+            x += w + (pad if c < used - 1 else 0)
         y += row_heights[r] + (pad if r < rows - 1 else 0)
 
     return canvas
@@ -294,7 +365,7 @@ def show_and_save_result_panel(args, state, result: dict):
     Compose and save ROM_PANEL.png into the trial dir.
     If --show and --show-result:
       - single: one window showing the latest panel
-      - gallery: one window showing a grid of the last N panels
+      - gallery: grid of the last N panels
     """
 
     if getattr(args, 'debug', False):
@@ -305,7 +376,6 @@ def show_and_save_result_panel(args, state, result: dict):
     session_stamp = getattr(state, 'session_stamp', None) or time.strftime("%Y%m%d_%H%M%S")
     trial_dir = getattr(state, 'rom_save_dir', None) or os.path.join(getattr(args, 'output_root', '.') or '.', "unknown_trial")
 
-    # Crop off the HUD (text strip + optional sparkline) from saved MIN/MAX frames
     text_h = int(getattr(args, 'text_strip_height', 0) or 0)
     plot_sec = float(getattr(args, 'plot_seconds', 0.0) or 0.0)
     plot_h = int(getattr(args, 'plot_height', 0) or 0)
@@ -328,7 +398,6 @@ def show_and_save_result_panel(args, state, result: dict):
     mmcv.imwrite(panel, panel_path)
     print(f"[ROM] Panel saved: {panel_path}")
 
-    # UI
     if not (getattr(args, 'show', False) and getattr(args, 'show_result', False)):
         return panel_path
 
@@ -336,7 +405,6 @@ def show_and_save_result_panel(args, state, result: dict):
 
     if mode == 'single':
         win = f"ROM Result - {test_name}"
-        # close previous panel window if any (regardless of previous mode)
         prev_win = getattr(state, 'result_window_name', None)
         if prev_win and prev_win != win:
             try:
@@ -353,21 +421,16 @@ def show_and_save_result_panel(args, state, result: dict):
         cv2.imshow(win, panel)
         return panel_path
 
-    # ----- gallery mode -----
-    # Keep deque of recent panel paths on state
     if not hasattr(state, 'gallery_paths') or state.gallery_paths is None:
         state.gallery_paths = deque(maxlen=max(1, int(getattr(args, 'gallery_size', 4))))
     else:
-        # Update maxlen if changed
         desired_len = max(1, int(getattr(args, 'gallery_size', 4)))
         if state.gallery_paths.maxlen != desired_len:
-            # rebuild with new maxlen
             items = list(state.gallery_paths)
             state.gallery_paths = deque(items[-desired_len:], maxlen=desired_len)
 
     state.gallery_paths.append(panel_path)
 
-    # Load last N panels and compose
     paths = list(state.gallery_paths)
     imgs = [ _load_img(p) for p in paths ]
     cols = max(1, int(getattr(args, 'gallery_cols', 2)))
