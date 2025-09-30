@@ -8,6 +8,7 @@ import mmengine
 import numpy as np
 from datetime import datetime
 from argparse import ArgumentParser
+from collections import deque
 
 from mmengine.logging import print_log
 from mmengine.registry import init_default_scope
@@ -28,6 +29,7 @@ from utils_3d import (
     resolve_point,
     angle_from_vecpair,
 )
+from utils_filters import make_filter_1d
 import pyrealsense2 as rs
 
 
@@ -167,6 +169,38 @@ def _angle_from_vecpair_auto(kpts_xy, kpt_scores, joint_xyz, pair, kpt_thr):
 
 
 # =========================
+# Smoothing state (CLI-driven)
+# =========================
+
+ANGLE_MODE = "median"  # "none"|"median"|"moving_average"|"exp"
+# Single-angle buffers/filters
+ANGLE_BUF = None
+ANGLE_FILT_1 = None
+LAST_ANG = None
+LAST_SRC = None
+# L/R buffers/filters
+ANGLE_BUF_L = None
+ANGLE_BUF_R = None
+ANGLE_FILT_L = None
+ANGLE_FILT_R = None
+LAST_L = LAST_R = None
+LAST_LSRC = LAST_RSRC = None
+
+
+def _append_and_disp_from_buf(buf, ang, src):
+    """Append sample and return (ang_disp, src_disp) with 3D-first temporal median."""
+    if ang is not None and src:
+        buf.append((time.time(), float(ang), src))
+    v3 = [a for _, a, s in buf if s == "3D"]
+    v2 = [a for _, a, s in buf if s == "2D"]
+    if v3:
+        return float(np.median(v3)), "3D"
+    if v2:
+        return float(np.median(v2)), "2D"
+    return None, None
+
+
+# =========================
 # Per-frame pipeline
 # =========================
 
@@ -227,11 +261,11 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                     depth_img=depth_img,
                     intrin_dict=intrin,
                     kpt_thr=args.kpt_thr,
-                    window_size=3,
-                    reducer="median",
-                    ignore_zeros=True,
-                    depth_min=0.1,
-                    depth_max=4.0,
+                    window_size=int(args.depth_win),
+                    reducer=str(args.depth_reducer),
+                    ignore_zeros=bool(args.depth_ignore_zeros),
+                    depth_min=float(args.depth_min),
+                    depth_max=float(args.depth_max),
                 )
             except Exception as e:
                 print(f"[WARN] 3D back-projection failed: {e}")
@@ -239,10 +273,13 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
 
     # Live angle text on Pose window for vector-pairs
     vecpairs = get_vectors_for_preset(args.rom_test)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    global LAST_ANG, LAST_SRC, LAST_L, LAST_LSRC, LAST_R, LAST_RSRC
+
     if vecpairs:
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        src_tag = None
         if len(vecpairs) == 1:
+            # Single angle
             ang, src = _angle_from_vecpair_auto(
                 kpts_xy_top[:, :2] if kpts_xy_top is not None else None,
                 kpt_scores_top,
@@ -250,11 +287,21 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                 vecpairs[0],
                 args.kpt_thr
             )
-            src_tag = src
-            txt = "Angle: --" if ang is None else f"Angle: {ang:.1f} deg ({src})"
+            if ANGLE_MODE == "median":
+                ang_disp, src_disp = _append_and_disp_from_buf(ANGLE_BUF, ang, src)
+            elif ANGLE_MODE == "moving_average":
+                ang_disp = None if ang is None else ANGLE_FILT_1.update(ang); src_disp = src
+            elif ANGLE_MODE == "exp":
+                ang_disp = None if ang is None else ANGLE_FILT_1.update(ang); src_disp = src
+            else:
+                ang_disp, src_disp = ang, src
+
+            LAST_ANG, LAST_SRC = ang_disp, src_disp
+            txt = "Angle: --" if ang_disp is None else f"Angle: {ang_disp:.1f} deg ({src_disp})"
             cv2.putText(frame_bgr, txt, (10, 30), font, 0.9, (0, 255, 255), 2, cv2.LINE_AA)
+
         else:
-            # "both" presets: try to label Left/Right from CATEGORY_SIDES
+            # Left/Right angles
             label_L, label_R = "Left", "Right"
             for _cat, sides in CATEGORY_SIDES.items():
                 if sides.get("both") == args.rom_test:
@@ -277,8 +324,25 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                 vecpairs[1],
                 args.kpt_thr
             )
-            sL = f"{label_L}: --" if angL is None else f"{label_L}: {angL:.1f} deg ({srcL})"
-            sR = f"{label_R}: --" if angR is None else f"{label_R}: {angR:.1f} deg ({srcR})"
+
+            if ANGLE_MODE == "median":
+                angL_disp, srcL_disp = _append_and_disp_from_buf(ANGLE_BUF_L, angL, srcL)
+                angR_disp, srcR_disp = _append_and_disp_from_buf(ANGLE_BUF_R, angR, srcR)
+            elif ANGLE_MODE == "moving_average":
+                angL_disp = None if angL is None else ANGLE_FILT_L.update(angL); srcL_disp = srcL
+                angR_disp = None if angR is None else ANGLE_FILT_R.update(angR); srcR_disp = srcR
+            elif ANGLE_MODE == "exp":
+                angL_disp = None if angL is None else ANGLE_FILT_L.update(angL); srcL_disp = srcL
+                angR_disp = None if angR is None else ANGLE_FILT_R.update(angR); srcR_disp = srcR
+            else:
+                angL_disp, srcL_disp = angL, srcL
+                angR_disp, srcR_disp = angR, srcR
+
+            LAST_L, LAST_LSRC = angL_disp, srcL_disp
+            LAST_R, LAST_RSRC = angR_disp, srcR_disp
+
+            sL = f"{label_L}: --" if angL_disp is None else f"{label_L}: {angL_disp:.1f} deg ({srcL_disp})"
+            sR = f"{label_R}: --" if angR_disp is None else f"{label_R}: {angR_disp:.1f} deg ({srcR_disp})"
             cv2.putText(frame_bgr, f"{sL}   {sR}", (10, 30), font, 0.9, (0, 255, 255), 2, cv2.LINE_AA)
 
     key = -1
@@ -320,7 +384,24 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.8)
     parser.add_argument("--draw-bbox", action="store_true")
     parser.add_argument("--rom_test", default="full_body")
-    # ROM behavior is handled in utils_rom/utils_results; unchanged here, we supply angles.
+
+    # --- depth back-projection args ---
+    parser.add_argument("--depth-win", type=int, default=3, help="Depth window size (odd).")
+    parser.add_argument("--depth-reducer", default="median", choices=["median", "mean"], help="Depth reducer within window.")
+    parser.add_argument("--depth-min", type=float, default=0.1, help="Min valid depth in meters.")
+    parser.add_argument("--depth-max", type=float, default=4.0, help="Max valid depth in meters.")
+    parser.add_argument("--no-depth-ignore-zeros", dest="depth_ignore_zeros", action="store_false",
+                        help="If set, do not ignore zeros in depth window.")
+    parser.set_defaults(depth_ignore_zeros=True)
+
+    # --- temporal angle smoothing args ---
+    parser.add_argument("--angle-filter", default="median",
+                        choices=["none", "median", "moving_average", "exp"],
+                        help="Temporal smoothing mode for angles.")
+    parser.add_argument("--angle-window", type=int, default=15, help="Window length for median mode.")
+    parser.add_argument("--ma-window", type=int, default=5, help="Window for moving average.")
+    parser.add_argument("--ma-robust", action="store_true", help="Use median in moving average (robust MA).")
+    parser.add_argument("--exp-alpha", type=float, default=0.25, help="EMA alpha for exp mode.")
 
     args = parser.parse_args()
 
@@ -362,10 +443,29 @@ def main():
 
     # Compare state
     compare_win = "Compare"
-    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None}
-    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None}
+    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+             "angL": None, "srcL": None, "angR": None, "srcR": None}
+    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+             "angL": None, "srcL": None, "angR": None, "srcR": None}
     last_rom_lines = []
     session_root = None  # set on first save (key 6)
+
+    # Init smoothing globals based on args
+    global ANGLE_MODE, ANGLE_BUF, ANGLE_BUF_L, ANGLE_BUF_R
+    global ANGLE_FILT_1, ANGLE_FILT_L, ANGLE_FILT_R
+    ANGLE_MODE = args.angle_filter
+    if ANGLE_MODE == "median":
+        ANGLE_BUF = deque(maxlen=max(1, int(args.angle_window)))
+        ANGLE_BUF_L = deque(maxlen=max(1, int(args.angle_window)))
+        ANGLE_BUF_R = deque(maxlen=max(1, int(args.angle_window)))
+    elif ANGLE_MODE in ("moving_average", "exp"):
+        kind = "moving_average" if ANGLE_MODE == "moving_average" else "exponential"
+        def mk():
+            return make_filter_1d(kind=kind,
+                                  ma_window=args.ma_window, ma_robust=args.ma_robust,
+                                  exp_alpha=args.exp_alpha)
+        ANGLE_FILT_1 = mk(); ANGLE_FILT_L = mk(); ANGLE_FILT_R = mk()
+    # else: "none" -> nothing to init
 
     def _update_compare_overlay():
         if not args.show:
@@ -405,7 +505,7 @@ def main():
         return lines
 
     def _compute_show_and_save_rom():
-        """Compute ROM with 3D-first fallback 2D, refresh Compare, then save panel."""
+        """Compute ROM using stored smoothed snapshots if present; else fall back to raw recompute."""
         nonlocal last_rom_lines
         last_rom_lines = []
 
@@ -423,35 +523,46 @@ def main():
 
         label_vals = []
         if len(vecpairs) == 1:
-            angA, srcA = _angle_from_vecpair_auto(
-                snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], vecpairs[0], args.kpt_thr
-            )
-            angB, srcB = _angle_from_vecpair_auto(
-                snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], vecpairs[0], args.kpt_thr
-            )
-            if angA is None or angB is None:
-                val = None; src = None
+            # Prefer stored smoothed snapshot
+            if (snapA.get("ang") is not None) and (snapB.get("ang") is not None):
+                val = abs(float(snapB["ang"]) - float(snapA["ang"]))
+                src = snapA["src"] if (snapA["src"] == snapB["src"]) else "mixed"
             else:
-                val = abs(angB - angA)
-                # if one is 3D and the other is 2D, mark as "mixed"
-                src = srcA if (srcA == srcB) else "mixed"
+                # fallback to recompute
+                angA, srcA = _angle_from_vecpair_auto(
+                    snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], vecpairs[0], args.kpt_thr
+                )
+                angB, srcB = _angle_from_vecpair_auto(
+                    snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], vecpairs[0], args.kpt_thr
+                )
+                if angA is None or angB is None:
+                    val = None; src = None
+                else:
+                    val = abs(angB - angA)
+                    src = srcA if (srcA == srcB) else "mixed"
             label_vals.append((args.rom_test, val, src))
         else:
-            # left/right
+            # Left/Right
             left_name, right_name = None, None
             for _cat, sides in CATEGORY_SIDES.items():
                 if sides.get("both") == args.rom_test:
                     left_name = sides.get("left", "Left")
                     right_name = sides.get("right", "Right")
                     break
-            for lab, pair in zip((left_name, right_name), vecpairs):
-                angA, srcA = _angle_from_vecpair_auto(
-                    snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], pair, args.kpt_thr
-                )
-                angB, srcB = _angle_from_vecpair_auto(
-                    snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], pair, args.kpt_thr
-                )
-                if angA is None or angB is None:
+            for side, lab, pair in (("L", left_name, vecpairs[0]), ("R", right_name, vecpairs[1])):
+                key_ang = "angL" if side == "L" else "angR"
+                key_src = "srcL" if side == "L" else "srcR"
+                if (snapA.get(key_ang) is not None) and (snapB.get(key_ang) is not None):
+                    angA = float(snapA[key_ang]); srcA = snapA[key_src]
+                    angB = float(snapB[key_ang]); srcB = snapB[key_src]
+                else:
+                    angA, srcA = _angle_from_vecpair_auto(
+                        snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], pair, args.kpt_thr
+                    )
+                    angB, srcB = _angle_from_vecpair_auto(
+                        snapB["kpts"][:, :2] if snapB["kpts"] is not None else None, snapB["scores"], snapB["xyz"], pair, args.kpt_thr
+                    )
+                if (angA is None) or (angB is None):
                     val = None; src = None
                 else:
                     val = abs(angB - angA)
@@ -528,17 +639,28 @@ def main():
                 if key in (ord('4'), ord('5'), ord('6')):
                     kpts, kscores = _extract_top_person_arrays(pred_instances)
                     if key == ord('4'):
-                        snapA = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": joint_xyz_top}
+                        # store smoothed snapshot values alongside raw arrays
+                        snapA = {
+                            "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": joint_xyz_top,
+                            "ang": LAST_ANG, "src": LAST_SRC,
+                            "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                        }
                         _update_compare_overlay()
                     elif key == ord('5'):
-                        snapB = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": joint_xyz_top}
+                        snapB = {
+                            "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": joint_xyz_top,
+                            "ang": LAST_ANG, "src": LAST_SRC,
+                            "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                        }
                         _update_compare_overlay()
                     elif key == ord('6'):
                         _compute_show_and_save_rom()
 
                 if key in (ord('1'), ord('2'), ord('3')):
-                    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None}
-                    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None}
+                    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+                             "angL": None, "srcL": None, "angR": None, "srcR": None}
+                    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+                             "angL": None, "srcL": None, "angR": None, "srcR": None}
                     last_rom_lines.clear()
                     _update_compare_overlay()
 
@@ -563,17 +685,27 @@ def main():
                 if key in (ord('4'), ord('5'), ord('6')):
                     kpts, kscores = _extract_top_person_arrays(pred_instances)
                     if key == ord('4'):
-                        snapA = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None}
+                        snapA = {
+                            "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None,
+                            "ang": LAST_ANG, "src": LAST_SRC,
+                            "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                        }
                         _update_compare_overlay()
                     elif key == ord('5'):
-                        snapB = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None}
+                        snapB = {
+                            "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None,
+                            "ang": LAST_ANG, "src": LAST_SRC,
+                            "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                        }
                         _update_compare_overlay()
                     elif key == ord('6'):
                         _compute_show_and_save_rom()
 
                 if key in (ord('1'), ord('2'), ord('3')):
-                    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None}
-                    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None}
+                    snapA = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+                             "angL": None, "srcL": None, "angR": None, "srcR": None}
+                    snapB = {"img": None, "kpts": None, "scores": None, "xyz": None, "ang": None, "src": None,
+                             "angL": None, "srcL": None, "angR": None, "srcR": None}
                     last_rom_lines.clear()
                     _update_compare_overlay()
 
@@ -589,9 +721,17 @@ def main():
             if key in (ord('4'), ord('5'), ord('6')):
                 kpts, kscores = _extract_top_person_arrays(pred_instances)
                 if key == ord('4'):
-                    snapA = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None}
+                    snapA = {
+                        "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None,
+                        "ang": LAST_ANG, "src": LAST_SRC,
+                        "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                    }
                 elif key == ord('5'):
-                    snapB = {"img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None}
+                    snapB = {
+                        "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": None,
+                        "ang": LAST_ANG, "src": LAST_SRC,
+                        "angL": LAST_L, "srcL": LAST_LSRC, "angR": LAST_R, "srcR": LAST_RSRC
+                    }
                 elif key == ord('6'):
                     _compute_show_and_save_rom()
             if args.show:
