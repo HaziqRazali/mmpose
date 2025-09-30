@@ -18,6 +18,11 @@ import mmengine
 from utils_visualization import show_and_save_result_panel
 from utils_rom import SessionState  # type hint / clarity (module must be accessible)
 
+from pathlib import Path
+from typing import Optional, Dict, Any
+from datetime import datetime
+import json
+
 def finalize_rom_trial(args, state: SessionState, t_now, frame_bgr, combined_bgr=None):
     """
     Returns:
@@ -159,3 +164,132 @@ def finalize_rom_trial(args, state: SessionState, t_now, frame_bgr, combined_bgr
     # Compose + save + optional popup
     show_and_save_result_panel(args, state, result)
     return result
+
+# =========================
+# Offline/batch result I/O
+# =========================
+
+def _safe_stem(s: str) -> str:
+    """
+    Sanitize string for filesystem use: keep alnum and replace others with '-'.
+    """
+    return "".join(ch if ch.isalnum() else "-" for ch in str(s)).strip("-") or "x"
+
+
+def _stem_from_times(t1: str, t2: str) -> str:
+    return f"{_safe_stem(t1.replace(':','-'))}_{_safe_stem(t2.replace(':','-'))}"
+
+
+def ensure_job_outdir(output_root: Optional[str],
+                      label: str,
+                      test: str,
+                      create_session: bool = False) -> Path:
+    """
+    Ensure an output directory of shape:
+      {output_root or '.'}/{optional batch_YYYYmmdd_HHMMSS}/{label}_{test}/
+    Returns the created Path.
+    """
+    root = Path(output_root) if output_root else Path(".")
+    if create_session:
+        root = root / f"batch_{datetime.now():%Y%m%d_%H%M%S}"
+    out_dir = root / f"{_safe_stem(label)}_{_safe_stem(test)}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def save_pair_result(out_dir: Path,
+                     *,
+                     label: str,
+                     test: str,
+                     t1: str,
+                     t2: str,
+                     idx1: int,
+                     idx2: int,
+                     angle_mode: str,
+                     angles_t1: Dict[str, Optional[float]],
+                     angles_t2: Dict[str, Optional[float]],
+                     rom_deg: Optional[float],
+                     panel_path: Optional[Path],
+                     status: str = "ok",
+                     extras: Optional[Dict[str, Any]] = None) -> Path:
+    """
+    Write a JSON summary for a single pair-comparison job.
+
+    Parameters
+    ----------
+    out_dir : Path
+        Directory to write into.
+    label, test, t1, t2, idx1, idx2 : metadata
+    angle_mode : "single" or "lr"
+        "single" -> use angles_t1["main"], angles_t2["main"]
+        "lr"     -> use angles_t1["L"], angles_t1["R"], angles_t2["L"], angles_t2["R"]
+    angles_t1, angles_t2 : dict
+        Keys per angle_mode as above. Values may be None.
+    rom_deg : Optional[float]
+    panel_path : Optional[Path]
+    status : str
+        "ok" or reason like "unavailable", "noframe", "noperson".
+    extras : Optional[dict]
+        Any additional fields to include.
+
+    Returns
+    -------
+    Path to the JSON file written.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = _stem_from_times(t1, t2)
+    json_path = out_dir / f"result_{stem}.json"
+
+    rec: Dict[str, Any] = {
+        "label": label,
+        "test": test,
+        "t1": t1,
+        "t2": t2,
+        "idx1": int(idx1),
+        "idx2": int(idx2),
+        "angle_mode": angle_mode,
+        "angles_t1": angles_t1,
+        "angles_t2": angles_t2,
+        "rom_deg": None if rom_deg is None else float(rom_deg),
+        "panel_path": None if panel_path is None else str(panel_path),
+        "status": status,
+        "written_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if extras:
+        # Shallow merge while avoiding key clobber
+        for k, v in extras.items():
+            if k not in rec:
+                rec[k] = v
+
+    with open(json_path, "w") as f:
+        json.dump(rec, f, indent=2)
+
+    return json_path
+
+
+def append_summary_tsv(out_dir: Path,
+                       row: Dict[str, Any],
+                       filename: str = "summary.tsv") -> Path:
+    """
+    Append a one-line summary to a TSV. Creates header if file does not exist.
+    Column order is stable by sorted keys.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = out_dir / filename
+
+    keys = sorted(row.keys())
+    line = "\t".join(str(row.get(k, "")) for k in keys)
+
+    if not tsv_path.exists():
+        header = "\t".join(keys)
+        with open(tsv_path, "w", encoding="utf-8") as f:
+            f.write(header + "\n")
+            f.write(line + "\n")
+    else:
+        with open(tsv_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    return tsv_path

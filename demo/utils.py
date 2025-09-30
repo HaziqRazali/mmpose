@@ -1,5 +1,10 @@
 from typing import Dict, List, Optional, Tuple
 from utils_variables import rom_test, CATEGORY_ORDER, CATEGORY_SIDES  # single source of truth
+import os
+from pathlib import Path
+import json
+import cv2
+import numpy as np
 
 # ---- Preset registries ----
 PRESET_NAMES = list(rom_test.keys())
@@ -152,3 +157,113 @@ def handle_hotkeys_for_presets(args, key: int) -> None:
         _to_next_in_nav(args, +1)
     elif key == ord('3'):
         _cycle_side(args)
+
+# =========================
+# Offline RGB/D batch utils
+# =========================
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+
+def parse_hhmmss_to_seconds(ts: str) -> float:
+    """
+    Convert 'HH:MM:SS' or 'HH:MM:SS.mmm' to seconds (float).
+    Raises ValueError on malformed input.
+    """
+    ts = ts.strip()
+    parts = ts.split(":")
+    if len(parts) != 3:
+        raise ValueError(f"Bad timestamp '{ts}'")
+    h = int(parts[0])
+    m = int(parts[1])
+    s = float(parts[2])
+    return float(h * 3600 + m * 60) + s
+
+
+def frame_index_from_ts(ts: str, fps: float) -> int:
+    """
+    Map timestamp string to zero-based frame index using floor(seconds*fps).
+    """
+    return int(max(0, int(parse_hhmmss_to_seconds(ts) * float(fps))))
+
+
+
+def _find_image_with_index(root: Path, idx: int) -> Optional[Path]:
+    """
+    Look for {root}/{idx:06d}{.png|.jpg|.jpeg}.
+    Returns Path or None.
+    """
+    stem = f"{idx:06d}"
+    for ext in _IMAGE_EXTS:
+        p = root / f"{stem}{ext}"
+        if p.is_file():
+            return p
+    return None
+
+
+def _imread_color(path: Path):
+    """
+    BGR uint8 image or None.
+    """
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return img
+
+
+def _imread_depth(path: Path):
+    """
+    Read depth as-is. Supports 16-bit PNGs or 32F EXRs if present.
+    Returns ndarray or None.
+    """
+    depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    return depth
+
+
+class RGBDFrameLoader:
+    """
+    Minimal offline loader for numbered RGB and optional depth frames.
+
+    Expected layout:
+      rgb_dir/000001.png (or .jpg/.jpeg)
+      depth_dir/000001.png  [optional]
+
+    Notes:
+      - No timing file required; batch mode maps HH:MM:SS -> index via fps.
+      - Depth is returned as raw ndarray (no scaling). Caller handles units.
+    """
+
+    def __init__(self, rgb_dir: str, depth_dir: Optional[str] = None, fps: float = 30.0):
+        self.rgb_dir = Path(rgb_dir) if rgb_dir else None
+        self.depth_dir = Path(depth_dir) if depth_dir else None
+        if not self.rgb_dir or not self.rgb_dir.is_dir():
+            raise NotADirectoryError(f"rgb_dir invalid: {rgb_dir}")
+        if self.depth_dir and not self.depth_dir.is_dir():
+            # Allow missing depth_dir if user supplied None
+            raise NotADirectoryError(f"depth_dir invalid: {depth_dir}")
+        self.fps = float(fps)
+
+    def get_by_index(self, idx: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[str], Optional[str]]:
+        """
+        Returns:
+          rgb_img, depth_img, rgb_path_str, depth_path_str
+        Any missing element is returned as None.
+        """
+        rgb_path = _find_image_with_index(self.rgb_dir, idx)
+        rgb_img = _imread_color(rgb_path) if rgb_path else None
+
+        depth_img, depth_path_str = None, None
+        if self.depth_dir is not None:
+            depth_path = _find_image_with_index(self.depth_dir, idx)
+            if depth_path:
+                depth_img = _imread_depth(depth_path)
+                depth_path_str = str(depth_path)
+
+        return rgb_img, depth_img, (str(rgb_path) if rgb_path else None), depth_path_str
+
+    def get_by_timestamp(self, ts: str) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray], Optional[str], Optional[str]]:
+        """
+        Map HH:MM:SS(.ms) -> frame index, then load that index.
+        Returns:
+          idx, rgb_img, depth_img, rgb_path_str, depth_path_str
+        """
+        idx = frame_index_from_ts(ts, self.fps)
+        rgb, depth, rp, dp = self.get_by_index(idx)
+        return idx, rgb, depth, rp, dp

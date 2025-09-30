@@ -6,6 +6,8 @@ import time
 from collections import deque
 import numpy as np
 import cv2
+from utils_3d import angle_from_vecpair
+from utils_variables import get_vectors_for_preset
 
 class SessionState:
     def __init__(self):
@@ -214,3 +216,153 @@ def attach_locked_frame_if_pending(state: SessionState, combined_bgr):
                 evt['frame'] = combined_bgr.copy()
                 break
         state.pending_capture_kind = None
+
+# ==========================================
+# Offline/batch angle helpers (no UI/globals)
+# ==========================================
+
+def _resolve_point_2d_with_scores_from_pose(pose: Dict[str, Any], spec, kpt_thr: float = 0.30):
+    """
+    Resolve a 2D point from a pose dict with keys:
+      - 'kpts_xy':  (K,2) float array of xy
+      - 'kpt_scores': (K,) float array of confidences in [0,1]
+    'spec' can be an int index or an iterable of indices to be averaged.
+    Returns np.array([x,y]) with NaNs if unavailable.
+    """
+    kxy = pose.get('kpts_xy', None)
+    ksc = pose.get('kpt_scores', None)
+    if kxy is None or ksc is None:
+        return np.array([np.nan, np.nan], dtype=float)
+
+    arr = np.asarray(kxy, dtype=float)
+    sco = np.asarray(ksc, dtype=float)
+    K = arr.shape[0]
+
+    def _one(i):
+        try:
+            j = int(i)
+            if j < 0 or j >= K:
+                return None
+            if not np.isfinite(sco[j]) or float(sco[j]) < kpt_thr:
+                return None
+            p = arr[j, :2]
+            if not np.all(np.isfinite(p)):
+                return None
+            return p
+        except Exception:
+            return None
+
+    if isinstance(spec, (list, tuple)):
+        pts = [p for p in (_one(i) for i in spec) if p is not None]
+        if not pts:
+            return np.array([np.nan, np.nan], dtype=float)
+        return np.nanmean(np.vstack(pts), axis=0)
+
+    p = _one(spec)
+    if p is None:
+        return np.array([np.nan, np.nan], dtype=float)
+    return p
+
+
+def _angle_from_vecpair_auto(pose: Dict[str, Any], vecpair, kpt_thr: float = 0.30):
+    """
+    Compute angle using 3D if available and valid; else fall back to 2D.
+
+    pose keys used:
+      - 'joint_xyz' : (K,3) float meter-space joints (optional)
+      - 'kpts_xy'   : (K,2) float pixel-space keypoints (optional)
+      - 'kpt_scores': (K,)  float confidences [0,1] (optional)
+
+    vecpair structure (as in your presets): ((P0,P1),(Q0,Q1)), where each is an
+    index or an iterable of indices to be averaged.
+
+    Returns (angle_deg or None, source_str '3D'|'2D'|None).
+    """
+    # Try 3D first
+    j3d = pose.get('joint_xyz', None)
+    if isinstance(j3d, np.ndarray) and j3d.ndim == 2 and j3d.shape[1] == 3:
+        ang3d = angle_from_vecpair(j3d, vecpair)
+        if np.isfinite(ang3d):
+            return float(ang3d), "3D"
+
+    # Fallback to 2D
+    try:
+        (P0, P1), (Q0, Q1) = vecpair
+    except Exception:
+        return None, None
+
+    A = _resolve_point_2d_with_scores_from_pose(pose, P1, kpt_thr)
+    B = _resolve_point_2d_with_scores_from_pose(pose, P0, kpt_thr)
+    C = _resolve_point_2d_with_scores_from_pose(pose, Q1, kpt_thr)
+
+    if np.any(np.isnan(A)) or np.any(np.isnan(B)) or np.any(np.isnan(C)):
+        return None, None
+
+    u = A - B
+    v = C - B
+    nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+    if nu <= 1e-6 or nv <= 1e-6:
+        return None, None
+
+    u /= nu
+    v /= nv
+    cosang = float(np.clip(np.dot(u, v), -1.0, 1.0))
+    ang = float(np.degrees(np.arccos(cosang)))
+    return ang, "2D"
+
+
+# ===================================
+# Batch/offline ROM evaluation helper
+# ===================================
+
+def compute_rom_for_pair(
+    pose1: Dict[str, Any],
+    pose2: Dict[str, Any],
+    test_name: str,
+    *,
+    last_vals: Optional[Dict[str, Any]] = None
+) -> Tuple[Optional[float], Dict[str, Optional[float]], Dict[str, Optional[float]]]:
+    """
+    Compute ROM between two poses for a given test preset.
+
+    Returns
+    -------
+    rom_deg : float or None
+        Absolute ROM in degrees.
+    angles1 : dict
+        Single-sided: {"main": a1}
+        L/R-sided:    {"L": a1L, "R": a1R}
+    angles2 : dict
+        Same keys as angles1.
+    """
+    vecpairs = get_vectors_for_preset(test_name)
+    if not vecpairs:
+        return None, {}, {}
+
+    # Single-sided
+    if len(vecpairs) == 1:
+        a1, src1 = _angle_from_vecpair_auto(pose1, vecpairs[0])
+        a2, src2 = _angle_from_vecpair_auto(pose2, vecpairs[0])
+        rom = None if (a1 is None or a2 is None) else float(abs(a2 - a1))
+        if last_vals is not None:
+            last_vals.update({"ang1": a1, "src1": src1, "ang2": a2, "src2": src2})
+        return rom, {"main": a1}, {"main": a2}
+
+    # Two-sided (L/R)
+    a1L, src1L = _angle_from_vecpair_auto(pose1, vecpairs[0])
+    a2L, src2L = _angle_from_vecpair_auto(pose2, vecpairs[0])
+    a1R, src1R = _angle_from_vecpair_auto(pose1, vecpairs[1])
+    a2R, src2R = _angle_from_vecpair_auto(pose2, vecpairs[1])
+
+    dL = None if (a1L is None or a2L is None) else float(abs(a2L - a1L))
+    dR = None if (a1R is None or a2R is None) else float(abs(a2R - a1R))
+    rom_candidates = [d for d in (dL, dR) if d is not None]
+    rom = None if not rom_candidates else float(max(rom_candidates))
+
+    if last_vals is not None:
+        last_vals.update({
+            "a1L": a1L, "a2L": a2L, "src1L": src1L, "src2L": src2L,
+            "a1R": a1R, "a2R": a2R, "src1R": src1R, "src2R": src2R,
+        })
+
+    return rom, {"L": a1L, "R": a1R}, {"L": a2L, "R": a2R}

@@ -143,3 +143,21 @@ for _name in _all_preset_names():
         rom_test[_name] = get_show_kpt_subset(_name)
     except Exception:
         rom_test[_name] = []
+
+# ==============================
+# Offline RGB/D batch defaults
+# ==============================
+
+# Default FPS used to convert HH:MM:SS(.ms) timestamps to frame indices
+OFFLINE_DEFAULT_FPS: float = 30.0
+
+# Default parent directory for batch outputs if a caller does not supply one.
+# Callers may still pass an explicit --output-root or similar to override.
+OFFLINE_DEFAULT_OUTPUT_ROOT: str = "outputs"
+
+# Prefix for auto-created batch session folders, e.g., "batch_20250930_181530"
+OFFLINE_SESSION_PREFIX: str = "batch_"
+
+# Max display width when showing compare panels interactively during batch runs.
+# Only used by UIs that choose to read it; safe to ignore elsewhere.
+OFFLINE_PANEL_MAX_WIDTH: int = 1400

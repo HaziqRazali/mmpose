@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-
+from typing import Optional, Tuple
+import numpy as np
 
 def extract_intrinsics_from_depth(depth_img):
     """Return intrinsics dict from a RealSense depth frame, or None if unavailable."""
@@ -261,3 +262,136 @@ def angle_from_vecpair(points, pair):
     if A.shape != B.shape or B.shape != C.shape:
         return np.nan
     return angle(A, B, C)
+
+# =========================
+# Offline depth + geometry
+# =========================
+
+def depth16_to_meters(depth_raw: np.ndarray, depth_scale: float) -> np.ndarray:
+    """
+    Convert a 16-bit depth image (uint16) to meters.
+    depth_scale is meters per unit (e.g., RealSense typical 0.001).
+    Returns float32 meters with NaN for zeros.
+    """
+    if depth_raw is None:
+        return None
+    d = depth_raw.astype(np.float32) * float(depth_scale)
+    d[d <= 0.0] = np.nan
+    return d
+
+
+def meters_to_depth16(depth_m: np.ndarray, depth_scale: float) -> np.ndarray:
+    """
+    Convert meters to uint16 depth given meters-per-unit scale.
+    Values <=0 or NaN become 0.
+    """
+    if depth_m is None:
+        return None
+    x = np.copy(depth_m).astype(np.float32)
+    x[~np.isfinite(x)] = 0.0
+    x[x <= 0.0] = 0.0
+    q = np.round(x / float(depth_scale)).astype(np.uint16)
+    return q
+
+
+def backproject_pixel_to_camera(u: float, v: float, depth_m: float,
+                                fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
+    """
+    Back-project a pixel (u,v) with metric depth to camera coords (meters).
+    Intrinsics in pixels. Returns (3,) float32 [X,Y,Z].
+    """
+    if not np.isfinite(depth_m) or depth_m <= 0.0:
+        return np.array([np.nan, np.nan, np.nan], dtype=np.float32)
+    X = (u - cx) * depth_m / fx
+    Y = (v - cy) * depth_m / fy
+    Z = depth_m
+    return np.array([X, Y, Z], dtype=np.float32)
+
+
+def project_camera_to_pixel(X: float, Y: float, Z: float,
+                            fx: float, fy: float, cx: float, cy: float) -> Tuple[float, float]:
+    """
+    Project a 3D camera-space point (meters) to pixel coords.
+    """
+    if not np.isfinite(Z) or Z <= 1e-9:
+        return (np.nan, np.nan)
+    u = fx * (X / Z) + cx
+    v = fy * (Y / Z) + cy
+    return (float(u), float(v))
+
+
+def build_K(fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
+    """
+    Return a 3x3 intrinsics matrix.
+    """
+    K = np.array([[fx, 0.0, cx],
+                  [0.0, fy, cy],
+                  [0.0, 0.0, 1.0]], dtype=np.float32)
+    return K
+
+
+def parse_intrinsics_dict(intrin: dict) -> Tuple[float, float, float, float]:
+    """
+    Accepts dicts like {'fx':..,'fy':..,'cx':..,'cy':..} or
+    RealSense-style {'ppx':..,'ppy':..,'fx':..,'fy':..}. Returns (fx,fy,cx,cy).
+    """
+    fx = float(intrin.get('fx'))
+    fy = float(intrin.get('fy'))
+    cx = float(intrin.get('cx', intrin.get('ppx')))
+    cy = float(intrin.get('cy', intrin.get('ppy')))
+    return fx, fy, cx, cy
+
+
+def angle_from_vecpair(joints_xyz: np.ndarray, vecpair) -> float:
+    """
+    Compute angle (deg) between vectors (P1-P0) and (Q1-P0) from joints_xyz (K,3).
+    vecpair = ((P0,P1),(Q0,Q1)), where each index may be an int or an iterable of ints
+    to be averaged. Returns np.nan if any endpoint invalid.
+    """
+    if joints_xyz is None or joints_xyz.ndim != 2 or joints_xyz.shape[1] != 3:
+        return np.nan
+
+    def _pt(spec):
+        if isinstance(spec, (list, tuple)):
+            pts = []
+            for i in spec:
+                j = int(i)
+                if j < 0 or j >= joints_xyz.shape[0]:
+                    return None
+                p = joints_xyz[j, :]
+                if not np.all(np.isfinite(p)):
+                    return None
+                pts.append(p)
+            if not pts:
+                return None
+            return np.nanmean(np.vstack(pts), axis=0)
+        j = int(spec)
+        if j < 0 or j >= joints_xyz.shape[0]:
+            return None
+        p = joints_xyz[j, :]
+        if not np.all(np.isfinite(p)):
+            return None
+        return p
+
+    try:
+        (P0, P1), (Q0, Q1) = vecpair
+    except Exception:
+        return np.nan
+
+    B = _pt(P0)
+    A = _pt(P1)
+    C = _pt(Q1)
+    if B is None or A is None or C is None:
+        return np.nan
+
+    u = A - B
+    v = C - B
+    nu = np.linalg.norm(u)
+    nv = np.linalg.norm(v)
+    if nu <= 1e-9 or nv <= 1e-9:
+        return np.nan
+
+    u /= nu
+    v /= nv
+    cosang = float(np.clip(np.dot(u, v), -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosang)))

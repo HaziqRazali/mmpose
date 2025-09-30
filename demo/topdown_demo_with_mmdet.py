@@ -1,14 +1,20 @@
 import os
 import time
+import json
 import logging
 import mimetypes
 import cv2
 import mmcv
 import mmengine
 import numpy as np
+
+from pathlib import Path
+from typing import List, Dict
 from datetime import datetime
 from argparse import ArgumentParser
 from collections import deque
+from collections import deque
+from utils_filters import make_filter_1d
 
 from mmengine.logging import print_log
 from mmengine.registry import init_default_scope
@@ -33,6 +39,96 @@ from utils_filters import make_filter_1d
 from utils_visualization import draw_rom_lines
 import pyrealsense2 as rs
 
+# =========================
+# Helpers: offline batch I/O
+# =========================
+
+def _parse_hhmmss(ts: str) -> float:
+    """Return seconds as float for 'HH:MM:SS' or 'HH:MM:SS.mmm'."""
+    ts = ts.strip()
+    parts = ts.split(":")
+    if len(parts) != 3:
+        raise ValueError(f"Bad timestamp '{ts}'")
+    h, m, s = int(parts[0]), int(parts[1]), float(parts[2])
+    return float(h * 3600 + m * 60) + s
+
+def _frame_idx_from_ts(ts: str, fps: float) -> int:
+    ts = ts.strip()
+    if ts.startswith("#"):
+        try:
+            return max(0, int(ts[1:]) - 1)  # 1-based -> 0-based
+        except Exception:
+            raise ValueError(f"Bad index spec '{ts}'")
+    return int(max(0, int(_parse_hhmmss(ts) * float(fps))))
+
+def _try_read_rgb(rgb_dir: str, idx: int):
+    base_variants = [
+        f"{idx:06d}", f"{idx:05d}", f"{idx:04d}", f"{idx:03d}", str(idx),
+        f"frame_{idx:06d}", f"frame_{idx:05d}", f"{'frame_'}{idx:04d}", f"frame_{idx:03d}", f"frame_{idx}"
+    ]
+    for base in base_variants:
+        for ext in (".png", ".jpg", ".jpeg"):
+            p = Path(rgb_dir) / f"{base}{ext}"
+            if p.is_file():
+                img = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                return img, str(p)
+
+    # Fallback: sorted listing
+    cache = getattr(_try_read_rgb, "_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(_try_read_rgb, "_cache", cache)
+    files = cache.get(rgb_dir)
+    if files is None:
+        files = []
+        for ext in (".png", ".jpg", ".jpeg"):
+            files.extend(sorted(str(p) for p in Path(rgb_dir).glob(f"*{ext}")))
+        cache[rgb_dir] = files
+
+    if 0 <= idx < len(files):
+        p = files[idx]
+        img = cv2.imread(p, cv2.IMREAD_COLOR)
+        return img, p
+    if 1 <= idx <= len(files):  # 1-based fallback
+        p = files[idx - 1]
+        img = cv2.imread(p, cv2.IMREAD_COLOR)
+        return img, p
+    return None, None
+
+def _compose_compare_panel_simple(imgA, imgB, header_lines: List[str], footer_lines: List[str] = None):
+    """Simple side-by-side compositor with header and optional footer."""
+    if imgA is None or imgB is None:
+        return None
+    hA, wA = imgA.shape[:2]
+    hB, wB = imgB.shape[:2]
+    target_h = max(hA, hB)
+    def _resize_h(img, h):
+        if img.shape[0] == h:
+            return img
+        scale = h / float(img.shape[0])
+        w = int(round(img.shape[1] * scale))
+        return cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+    A = _resize_h(imgA, target_h)
+    B = _resize_h(imgB, target_h)
+    panel = cv2.hconcat([A, B])
+
+    # header
+    header_h = 48
+    header = np.zeros((header_h, panel.shape[1], 3), dtype=np.uint8)
+    y = 32
+    for i, line in enumerate(header_lines or []):
+        cv2.putText(header, line, (12, y + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+    canv = cv2.vconcat([header, panel])
+
+    if footer_lines:
+        footer_h = 36
+        footer = np.zeros((footer_h, canv.shape[1], 3), dtype=np.uint8)
+        yy = 24
+        for i, line in enumerate(footer_lines):
+            cv2.putText(footer, line, (12, yy + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        canv = cv2.vconcat([canv, footer])
+    return canv
 
 # =========================
 # Helpers: persons & angles
@@ -371,6 +467,192 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
 
     return data_samples.get("pred_instances", None), key, frame_bgr, joint_xyz_top
 
+def run_offline_batch(args, detector, pose_estimator, visualizer):
+    """
+    Batch mode:
+      - Read tasks JSON
+      - For each job: set args.rom_test, map t1/t2 -> frame indices, run pose on both frames,
+        read displayed angles from LAST_* globals, compose a compare panel, and save.
+    """
+    tasks_path = Path(args.tasks)
+    rgb_dir = Path(args.rgb_dir)
+    if not tasks_path.is_file():
+        raise FileNotFoundError(f"--tasks not found: {tasks_path}")
+    if not rgb_dir.is_dir():
+        raise NotADirectoryError(f"--rgb-dir not a directory: {rgb_dir}")
+
+    with open(tasks_path, "r") as f:
+        jobs = json.load(f)
+    if not isinstance(jobs, list) or len(jobs) == 0:
+        raise ValueError("tasks JSON must be a non-empty list")
+
+    # Session output root
+    session_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_root = Path(args.output_root) if args.output_root else Path(".")
+    out_root = out_root / f"batch_{session_stamp}"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    # Disable live windows unless user wants it
+    show_windows = False if args.no_show else bool(args.show)
+
+    # Init temporal smoothing globals (same as interactive)
+    global ANGLE_MODE, ANGLE_BUF, ANGLE_BUF_L, ANGLE_BUF_R
+    global ANGLE_FILT_1, ANGLE_FILT_L, ANGLE_FILT_R
+
+    ANGLE_MODE = getattr(args, "angle_filter", "none")
+
+    if ANGLE_MODE == "median":
+        win = int(getattr(args, "angle_window", 9))
+        ANGLE_BUF   = deque(maxlen=max(1, win))
+        ANGLE_BUF_L = deque(maxlen=max(1, win))
+        ANGLE_BUF_R = deque(maxlen=max(1, win))
+        ANGLE_FILT_1 = ANGLE_FILT_L = ANGLE_FILT_R = None
+
+    elif ANGLE_MODE in ("moving_average", "exp"):
+        kind = "moving_average" if ANGLE_MODE == "moving_average" else "exponential"
+        ANGLE_BUF = ANGLE_BUF_L = ANGLE_BUF_R = None
+        ANGLE_FILT_1 = make_filter_1d(
+            kind=kind,
+            ma_window=getattr(args, "ma_window", 9),
+            ma_robust=getattr(args, "ma_robust", False),
+            exp_alpha=getattr(args, "exp_alpha", 0.2),
+        )
+        ANGLE_FILT_L = make_filter_1d(
+            kind=kind,
+            ma_window=getattr(args, "ma_window", 9),
+            ma_robust=getattr(args, "ma_robust", False),
+            exp_alpha=getattr(args, "exp_alpha", 0.2),
+        )
+        ANGLE_FILT_R = make_filter_1d(
+            kind=kind,
+            ma_window=getattr(args, "ma_window", 9),
+            ma_robust=getattr(args, "ma_robust", False),
+            exp_alpha=getattr(args, "exp_alpha", 0.2),
+        )
+
+    else:  # none
+        ANGLE_MODE = "none"
+        ANGLE_BUF = ANGLE_BUF_L = ANGLE_BUF_R = None
+        ANGLE_FILT_1 = ANGLE_FILT_L = ANGLE_FILT_R = None
+
+    processed = 0
+    failed = 0
+
+    for job in jobs:
+        # Two shapes supported:
+        #   {"t1":"HH:MM:SS(.ms)","t2":"HH:MM:SS(.ms)","test":"left_elbow_flexion","label":"optional"}
+        #   {"ts":[...], "test":"...", "label":"optional"} -> runs adjacent pairs
+        label = str(job.get("label", f"job{processed+1}"))
+        test = str(job.get("test", "full_body"))
+
+        def _run_pair(t1: str, t2: str, pair_idx: int):
+            nonlocal processed, failed
+            try:
+                idx1 = _frame_idx_from_ts(t1, args.fps)
+                idx2 = _frame_idx_from_ts(t2, args.fps)
+
+                # load RGB frames
+                rgb1, p1 = _try_read_rgb(str(rgb_dir), idx1)
+                rgb2, p2 = _try_read_rgb(str(rgb_dir), idx2)
+                if rgb1 is None or rgb2 is None:
+                    raise FileNotFoundError(f"Frames not found for indices {idx1},{idx2}")
+
+                # Set current ROM preset
+                setattr(args, "rom_test", test)
+
+                # Run inference on frame 1
+                pred1, key1, vis1, joint_xyz1 = process_one_image(
+                    args, rgb1, None, detector, pose_estimator, visualizer, show_interval=0
+                )
+                # Capture angle(s)
+                vecpairs = get_vectors_for_preset(args.rom_test)
+                if vecpairs and len(vecpairs) == 1:
+                    a1, a1_src = LAST_ANG, LAST_SRC
+                elif vecpairs and len(vecpairs) >= 2:
+                    # For L/R tests we report both and main ROM is max delta across sides
+                    a1, a1_src = (LAST_L, LAST_LSRC)
+                    b1, b1_src = (LAST_R, LAST_RSRC)
+                else:
+                    a1 = None
+
+                # Run inference on frame 2
+                pred2, key2, vis2, joint_xyz2 = process_one_image(
+                    args, rgb2, None, detector, pose_estimator, visualizer, show_interval=0
+                )
+                if vecpairs and len(vecpairs) == 1:
+                    a2, a2_src = LAST_ANG, LAST_SRC
+                    rom_deg = None if (a1 is None or a2 is None) else float(abs(a2 - a1))
+                    footer = [] if rom_deg is None else [f"ROM = {rom_deg:.1f} deg"]
+                    hdr = [f"Test: {test}",
+                           f"T1 {t1} -> idx {idx1} | T2 {t2} -> idx {idx2}",
+                           f"Angles: {('N/A' if a1 is None else f'{a1:.1f} deg')} -> {('N/A' if a2 is None else f'{a2:.1f} deg')}"]
+                else:
+                    a2, a2_src = (LAST_L, LAST_LSRC)
+                    b2, b2_src = (LAST_R, LAST_RSRC)
+                    # Compute per-side deltas if both sides exist
+                    dL = None if (a1 is None or a2 is None) else float(abs(a2 - a1))
+                    dR = None if ('b1' not in locals() or 'b2' not in locals() or b1 is None or b2 is None) else float(abs(b2 - b1))
+                    # Report max available as ROM
+                    rom_candidates = [d for d in (dL, dR) if d is not None]
+                    rom_deg = None if not rom_candidates else float(max(rom_candidates))
+                    footer = [] if rom_deg is None else [f"ROM = {rom_deg:.1f} deg"]
+                    hdr = [f"Test: {test}",
+                           f"T1 {t1} -> idx {idx1} | T2 {t2} -> idx {idx2}",
+                           f"L: {('N/A' if a1 is None else f'{a1:.1f}')} -> {('N/A' if a2 is None else f'{a2:.1f}')},  "
+                           f"R: {('N/A' if 'b1' not in locals() or b1 is None else f'{b1:.1f}')} -> {('N/A' if 'b2' not in locals() or b2 is None else f'{b2:.1f}')} deg"]
+
+                # Compose compare panel
+                panel = _compose_compare_panel_simple(vis1, vis2, header_lines=hdr, footer_lines=footer)
+
+                # Save
+                out_dir = out_root / f"{label}_{test}"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                stem = f"{t1.replace(':','-')}_{t2.replace(':','-')}"
+                panel_path = out_dir / f"panel_{stem}.png"
+                cv2.imwrite(str(panel_path), panel)
+
+                # Write a small JSON per pair
+                meta = {
+                    "label": label,
+                    "test": test,
+                    "t1": t1, "t2": t2,
+                    "idx1": idx1, "idx2": idx2,
+                    "angle_mode": "single" if (vecpairs and len(vecpairs) == 1) else "lr",
+                    "angle_t1": None if vecpairs and len(vecpairs) != 1 else a1,
+                    "angle_t2": None if vecpairs and len(vecpairs) != 1 else a2,
+                    "rom_deg": None if panel is None else (footer and rom_deg),
+                    "panel_path": str(panel_path)
+                }
+                with open(out_dir / f"result_{stem}.json", "w") as jf:
+                    json.dump(meta, jf, indent=2)
+                processed += 1
+
+                # Optional view
+                if show_windows:
+                    cv2.imshow("Compare", panel)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == 27:
+                        return  # ESC closes batch early
+
+            except Exception as e:
+                failed += 1
+                print(f"[ERROR] Batch pair failed for {label}/{test} ({t1},{t2}): {e}")
+
+        # one pair
+        if "t1" in job and "t2" in job:
+            _run_pair(str(job["t1"]), str(job["t2"]), 0)
+        # sequence
+        elif "ts" in job and isinstance(job["ts"], list) and len(job["ts"]) >= 2:
+            ts = [str(x) for x in job["ts"]]
+            for i in range(len(ts) - 1):
+                _run_pair(ts[i], ts[i+1], i)
+        else:
+            print(f"[WARN] Skipping malformed job: {job}")
+
+    if show_windows:
+        cv2.destroyAllWindows()
+
+    print(f"[BATCH DONE] processed={processed}, failed={failed}, output={out_root}")
 
 # =========================
 # Main
@@ -430,6 +712,12 @@ def main():
     parser.add_argument("--ma-robust", action="store_true", help="Use median in moving average (robust MA).")
     parser.add_argument("--exp-alpha", type=float, default=0.25, help="EMA alpha for exp mode.")
 
+    # --- NEW: offline RGB batch mode ---
+    parser.add_argument("--rgb-dir", type=str, default="", help="Directory of RGB frames named 000001.png/jpg etc.")
+    parser.add_argument("--tasks", type=str, default="", help="JSON file describing timestamped jobs.")
+    parser.add_argument("--fps", type=float, default=30.0, help="FPS used to map HH:MM:SS timestamps to frame indices.")
+    parser.add_argument("--no-show", action="store_true", help="Disable any UI windows in batch mode.")
+
     args = parser.parse_args()
 
     # Init models
@@ -441,6 +729,12 @@ def main():
     # Visualizer
     visualizer = VISUALIZERS.build(pose_estimator.cfg.visualizer)
     visualizer.set_dataset_meta(pose_estimator.dataset_meta)
+
+    if args.tasks and args.rgb_dir != "":
+        if args.no_show:
+            args.show = False
+        run_offline_batch(args, detector, pose_estimator, visualizer)
+        return
 
     # Output writer (optional)
     output_file = None

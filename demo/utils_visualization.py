@@ -14,6 +14,8 @@ from collections import deque
 import numpy as np
 import cv2
 import mmcv
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 # ---------- internal helpers (kept private) ----------
 
@@ -452,5 +454,123 @@ def show_and_save_result_panel(args, state, result: dict):
     target_h = int(gallery.shape[0] * scale)
     cv2.resizeWindow(win, target_w, target_h)
     cv2.imshow(win, gallery)
+
+    return panel_path
+
+# ---------- Simple compare panel (side-by-side) + saver ----------
+
+def compose_compare_panel(imgA: np.ndarray,
+                          imgB: np.ndarray,
+                          header_lines: Optional[List[str]] = None,
+                          footer_lines: Optional[List[str]] = None,
+                          left_title: Optional[str] = None,
+                          right_title: Optional[str] = None) -> Optional[np.ndarray]:
+    """
+    Create a side-by-side BGR panel with a header and optional footer.
+    Returns BGR np.ndarray or None if inputs invalid.
+    """
+    if imgA is None or imgB is None:
+        return None
+
+    def _resize_to_height(img: np.ndarray, target_h: int) -> np.ndarray:
+        if img.shape[0] == target_h:
+            return img
+        scale = target_h / float(img.shape[0])
+        w = int(round(img.shape[1] * scale))
+        return cv2.resize(img, (w, target_h), interpolation=cv2.INTER_AREA)
+
+    # match heights
+    hA, wA = imgA.shape[:2]
+    hB, wB = imgB.shape[:2]
+    target_h = max(hA, hB)
+    A = _resize_to_height(imgA, target_h)
+    B = _resize_to_height(imgB, target_h)
+
+    # optional per-side titles strip
+    title_h = 0
+    if left_title or right_title:
+        title_h = 36
+        title_strip = np.zeros((title_h, A.shape[1] + B.shape[1], 3), dtype=np.uint8)
+        if left_title:
+            cv2.putText(title_strip, str(left_title), (12, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 1, cv2.LINE_AA)
+        if right_title:
+            # right title anchored roughly to the center of right half
+            x0 = A.shape[1] + 12
+            cv2.putText(title_strip, str(right_title), (x0, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 1, cv2.LINE_AA)
+
+    # header strip
+    header_h = 0
+    if header_lines:
+        header_h = 48
+        header = np.zeros((header_h, A.shape[1] + B.shape[1], 3), dtype=np.uint8)
+        y0 = 30
+        for i, line in enumerate(header_lines):
+            cv2.putText(header, str(line), (12, y0 + i * 22),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    else:
+        header = None
+
+    # footer strip
+    footer_h = 0
+    if footer_lines:
+        footer_h = 36
+        footer = np.zeros((footer_h, A.shape[1] + B.shape[1], 3), dtype=np.uint8)
+        y0 = 24
+        for i, line in enumerate(footer_lines):
+            cv2.putText(footer, str(line), (12, y0 + i * 22),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    else:
+        footer = None
+
+    # compose center panel
+    center = cv2.hconcat([A, B])
+
+    # stack everything
+    parts = []
+    if header_h > 0:
+        parts.append(header)
+    if title_h > 0:
+        parts.append(title_strip)
+    parts.append(center)
+    if footer_h > 0:
+        parts.append(footer)
+
+    panel = cv2.vconcat(parts) if len(parts) > 1 else center
+    return panel
+
+
+def save_and_maybe_show_compare(panel: np.ndarray,
+                                out_dir: Path,
+                                stem: str,
+                                args,
+                                window_title: Optional[str] = None) -> Path:
+    """
+    Save compare panel to {out_dir}/{stem}.png.
+    If args.show is True and not suppressed elsewhere, show in a resizable window.
+    Returns saved Path.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    panel_path = out_dir / f"{stem}.png"
+    if panel is not None:
+        cv2.imwrite(str(panel_path), panel)
+
+    # Optional UI display
+    if getattr(args, 'show', False):
+        win = window_title or "Compare"
+        try:
+            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            target_w = min(1400, panel.shape[1])
+            scale = target_w / float(panel.shape[1])
+            target_h = int(panel.shape[0] * scale)
+            cv2.resizeWindow(win, target_w, target_h)
+            cv2.imshow(win, panel)
+            # Non-blocking 1 ms to allow window paint; caller decides further waits
+            cv2.waitKey(1)
+        except Exception:
+            # headless or display error; ignore
+            pass
 
     return panel_path
