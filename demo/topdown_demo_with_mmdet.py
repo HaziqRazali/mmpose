@@ -227,9 +227,7 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
     else:
         color_img_rgb = mmcv.imread(color_img, channel_order="rgb")
 
-    # Visualization branch:
-    # - if --only-rom-lines and mode not in {133, full_body}, skip visualizer
-    # - else use normal visualizer (skeleton, joints, etc.)
+    # Visualization branch
     use_rom_only = bool(getattr(args, "only_rom_lines", False)) and (args.rom_test not in ("133", "full_body"))
     if (visualizer is not None) and (not use_rom_only):
         visualizer.add_datasample(
@@ -289,7 +287,7 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                 thickness=args.thickness,
             )
 
-    # Live angle text on Pose window for vector-pairs (unchanged)
+    # Live angle text on Pose window for vector-pairs
     vecpairs = get_vectors_for_preset(args.rom_test)
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -417,6 +415,12 @@ def main():
                         help="If set, do not ignore zeros in depth window.")
     parser.set_defaults(depth_ignore_zeros=True)
 
+    # --- NEW: depth viewing and probing ---
+    parser.add_argument("--show-depth", action="store_true",
+                        help="Open a separate window to visualize the depth stream when using RealSense.")
+    parser.add_argument("--probe-depth", action="store_true",
+                        help="Left-click in 'Pose' or 'Depth' window to print depth at that pixel (meters).")
+
     # --- temporal angle smoothing args ---
     parser.add_argument("--angle-filter", default="median",
                         choices=["none", "median", "moving_average", "exp"],
@@ -490,6 +494,25 @@ def main():
         ANGLE_FILT_1 = mk(); ANGLE_FILT_L = mk(); ANGLE_FILT_R = mk()
     # else: "none" -> nothing to init
 
+    # --- Depth probe state and callbacks ---
+    depth_probe = {"frame": None}  # latest aligned rs.depth_frame
+
+    def _on_mouse(event, x, y, flags, param):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        df = depth_probe.get("frame", None)
+        if df is None:
+            print("[DEPTH] No depth frame available.")
+            return
+        try:
+            z = float(df.get_distance(int(x), int(y)))
+            if np.isfinite(z) and z > 0.0:
+                print(f"[DEPTH] ({x},{y}) = {z:.3f} m")
+            else:
+                print(f"[DEPTH] ({x},{y}) = invalid/0")
+        except Exception as e:
+            print(f"[DEPTH] probe failed: {e}")
+
     def _update_compare_overlay():
         if not args.show:
             return None
@@ -514,10 +537,6 @@ def main():
         print(f"[INFO] Saved: {out_path}")
 
     def _format_rom_lines(label_to_value_src):
-        """
-        label_to_value_src: list[(label, value_or_None, src_or_None)]
-        Output: ["label: value deg (SRC)" or "label: N/A"]
-        """
         lines = []
         for label, val, src in label_to_value_src:
             if val is None:
@@ -528,7 +547,6 @@ def main():
         return lines
 
     def _compute_show_and_save_rom():
-        """Compute ROM using stored smoothed snapshots if present; else fall back to raw recompute."""
         nonlocal last_rom_lines
         last_rom_lines = []
 
@@ -546,12 +564,10 @@ def main():
 
         label_vals = []
         if len(vecpairs) == 1:
-            # Prefer stored smoothed snapshot
             if (snapA.get("ang") is not None) and (snapB.get("ang") is not None):
                 val = abs(float(snapB["ang"]) - float(snapA["ang"]))
                 src = snapA["src"] if (snapA["src"] == snapB["src"]) else "mixed"
             else:
-                # fallback to recompute
                 from_this = vecpairs[0]
                 angA, srcA = _angle_from_vecpair_auto(
                     snapA["kpts"][:, :2] if snapA["kpts"] is not None else None, snapA["scores"], snapA["xyz"], from_this, args.kpt_thr
@@ -566,7 +582,6 @@ def main():
                     src = srcA if (srcA == srcB) else "mixed"
             label_vals.append((args.rom_test, val, src))
         else:
-            # Left/Right
             left_name, right_name = None, None
             for _cat, sides in CATEGORY_SIDES.items():
                 if sides.get("both") == args.rom_test:
@@ -605,6 +620,9 @@ def main():
     is_image = False
     frames = None
 
+    # Depth visualization helper
+    colorizer = rs.colorizer() if args.show_depth else None
+
     if input_src.lower() == "realsense":
         try:
             depth_pipe = rs.pipeline()
@@ -634,6 +652,17 @@ def main():
             print("[ERROR] No webcam found (and no other input specified).")
             return
 
+    # Precreate windows for mouse callbacks if needed
+    if args.show:
+        cv2.namedWindow("Pose", cv2.WINDOW_NORMAL)
+    if args.show_depth:
+        cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
+    if args.probe_depth:
+        # Attach callbacks only to Pose and Depth (not Compare)
+        cv2.setMouseCallback("Pose", _on_mouse)
+        if args.show_depth:
+            cv2.setMouseCallback("Depth", _on_mouse)
+
     _update_compare_overlay()
 
     # ---------- Main loops ----------
@@ -647,10 +676,18 @@ def main():
                 if not depth_frame or not color_frame:
                     continue
                 color = np.asanyarray(color_frame.get_data())
-                depth = depth_frame
+
+                # update probe frame
+                depth_probe["frame"] = depth_frame
+
+                # Optional depth window
+                if args.show_depth:
+                    dvis = np.asanyarray(colorizer.colorize(depth_frame).get_data()) if colorizer else None
+                    if dvis is not None:
+                        cv2.imshow("Depth", dvis)
 
                 pred_instances, key, frame_bgr, joint_xyz_top = process_one_image(
-                    args, color, depth, detector, pose_estimator, visualizer, args.show_interval
+                    args, color, depth_frame, detector, pose_estimator, visualizer, args.show_interval
                 )
 
                 if output_file:
@@ -663,7 +700,6 @@ def main():
                 if key in (ord('4'), ord('5'), ord('6')):
                     kpts, kscores = _extract_top_person_arrays(pred_instances)
                     if key == ord('4'):
-                        # store smoothed snapshot values alongside raw arrays
                         snapA = {
                             "img": frame_bgr.copy(), "kpts": kpts, "scores": kscores, "xyz": joint_xyz_top,
                             "ang": LAST_ANG, "src": LAST_SRC,

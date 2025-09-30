@@ -26,7 +26,7 @@ configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-
 https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
 --input "realsense" --show --only-rom-lines 
 
---show-depth --probe-depth --only-rom-lines
+--show-depth --probe-depth
 
 # home desktop + creative
 python demo/topdown_demo_with_mmdet.py \
