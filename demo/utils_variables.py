@@ -16,10 +16,9 @@ full_body = [
     112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132
 ]
 
-# ---------- Vector-pair ROM presets (with legacy triplet fallback) ----------
-# Value forms:
+# ---------- Vector-pair ROM presets ONLY (triplets fully removed) ----------
+# Value form:
 #  - vector pair: [[P0,P1],[Q0,Q1]], each point is int id or list[int] to average
-#  - legacy triplet: [A,B,C] -> converted at runtime to [[B,A],[B,C]]
 # Special keys:
 #  - "full_body" -> sentinel
 #  - "133" -> list(range(133)) for viz only
@@ -32,11 +31,13 @@ _rom_single_vectors = {
     "left_elbow_flexion":   [[7, 5], [7, 9]],
     "right_elbow_flexion":  [[8, 6], [8, 10]],
 
-    # shoulder (using spine: mid-shoulders -> mid-hips)
+    # shoulder flexion/abduction use spine proxy [[shoulder, wrist], [mid-shoulders, mid-hips]]
     "left_shoulder_flexion":        [[5, 7], [[5, 6], [11, 12]]],
     "right_shoulder_flexion":       [[6, 8], [[5, 6], [11, 12]]],
     "left_shoulder_abduction":      [[5, 7], [[5, 6], [11, 12]]],
     "right_shoulder_abduction":     [[6, 8], [[5, 6], [11, 12]]],
+
+    # shoulder rotation placeholders
     "left_shoulder_external_rotation":  [[7, 5], [7, 9]],
     "right_shoulder_external_rotation": [[8, 6], [8, 10]],
     "left_shoulder_internal_rotation":  [[7, 9], [7, 5]],
@@ -53,31 +54,6 @@ _rom_single_vectors = {
     "right_ankle_dorsiflexion":    [[16, 14], [16, [20, 21]]],
     "left_ankle_plantarflexion":   [[15, 13], [15, [17, 18]]],
     "right_ankle_plantarflexion":  [[16, 14], [16, [20, 21]]],
-}
-
-# Legacy triplets accepted for backward compatibility
-_rom_single_triplets_legacy = {
-    "left_elbow_flexion":   [5, 7, 9],
-    "right_elbow_flexion":  [6, 8, 10],
-
-    "left_shoulder_flexion":        [11, 5, 7],
-    "right_shoulder_flexion":       [8, 6, 12],
-    "left_shoulder_abduction":      [11, 5, 7],
-    "right_shoulder_abduction":     [8, 6, 12],
-    "left_shoulder_external_rotation":  [7, 5, 9],
-    "right_shoulder_external_rotation": [8, 6, 10],
-    "left_shoulder_internal_rotation":  [7, 5, 9],
-    "right_shoulder_internal_rotation": [8, 6, 10],
-
-    "left_knee_flexion":     [11, 13, 15],
-    "right_knee_flexion":    [12, 14, 16],
-    "left_knee_extension":   [11, 13, 15],
-    "right_knee_extension":  [12, 14, 16],
-
-    "left_ankle_dorsiflexion":     [13, 15, [17, 18]],
-    "right_ankle_dorsiflexion":    [14, 16, [20, 21]],
-    "left_ankle_plantarflexion":   [13, 15, [17, 18]],
-    "right_ankle_plantarflexion":  [14, 16, [20, 21]],
 }
 
 def _flatten_unique(seq):
@@ -121,15 +97,13 @@ CATEGORY_ORDER = [
 ]
 
 def get_vectors_for_preset(name):
+    """Return a list of vector-pairs for the preset (handles 'both' by concatenation)."""
     if name in ("full_body", "133"):
         return []
     if name in _rom_single_vectors:
         vec = _rom_single_vectors[name]
         if isinstance(vec, list) and len(vec) == 2 and all(isinstance(v, (list, tuple)) for v in vec):
             return [vec]
-    if name in _rom_single_triplets_legacy:
-        A, B, C = _unpack_triplet(_rom_single_triplets_legacy[name])
-        return [[[B, A], [B, C]]]
     for _cat, sides in CATEGORY_SIDES.items():
         if sides.get("both") == name:
             left_name, right_name = sides["left"], sides["right"]
@@ -137,6 +111,7 @@ def get_vectors_for_preset(name):
     return []
 
 def get_show_kpt_subset(name):
+    """Subset of joint IDs to render for the current preset, derived from vector-pairs only."""
     if name == "full_body":
         return full_body
     if name == "133":
@@ -155,12 +130,7 @@ def get_show_kpt_subset(name):
             _add(P0); _add(P1); _add(Q0); _add(Q1)
     return sorted(ids)
 
-def _unpack_triplet(tri):
-    A = int(tri[0]); B = int(tri[1]); C = tri[2]
-    C = [int(x) for x in C] if isinstance(C, (list, tuple)) else int(C)
-    return A, B, C
-
-# Backward-compat export for older imports: rom_test -> name -> kpt subset
+# Export for demo: name -> kpt subset
 def _all_preset_names():
     names = set(_rom_single_vectors.keys())
     for _cat, sides in CATEGORY_SIDES.items():

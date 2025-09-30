@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
 
 def extract_intrinsics_from_depth(depth_img):
     """Return intrinsics dict from a RealSense depth frame, or None if unavailable."""
@@ -11,30 +12,92 @@ def extract_intrinsics_from_depth(depth_img):
             "fy": depth_intrin.fy,
             "ppx": depth_intrin.ppx,
             "ppy": depth_intrin.ppy,
-            "depth_scale": 0.001  # RealSense default
+            "depth_scale": 0.001  # RealSense default meters
         }
     except Exception as e:
         print(f"[!] Cannot extract intrinsics for 3D viz: {e}")
         return None
 
-def deproject(depth_val, x, y, intrin):
-        fx, fy = intrin["fx"], intrin["fy"]
-        ppx, ppy = intrin["ppx"], intrin["ppy"]
-        X = (x - ppx) * depth_val / fx
-        Y = (y - ppy) * depth_val / fy
-        Z = depth_val
-        return [X, Y, Z]
 
-def compute_joint_xyz_for_person(person_kpts, person_vis, depth_img, intrin_dict, kpt_thr):
-    """Compute per-joint XYZ (meters) for one person. NaN where invalid."""
+def deproject(depth_val, x, y, intrin):
+    fx, fy = intrin["fx"], intrin["fy"]
+    ppx, ppy = intrin["ppx"], intrin["ppy"]
+    X = (x - ppx) * depth_val / fx
+    Y = (y - ppy) * depth_val / fy
+    Z = depth_val
+    return [X, Y, Z]
+
+
+def _reduce_depth_window(depth_img, cx, cy, w, ignore_zeros, reducer, dmin, dmax):
+    """
+    Sample a w×w window around integer center (cx,cy).
+    Returns a single scalar depth in meters or np.nan if none valid.
+    """
+    H, W = depth_img.height, depth_img.width
+    r = int(max(0, (w // 2)))
+    xs = range(max(0, cx - r), min(W, cx + r + 1))
+    ys = range(max(0, cy - r), min(H, cy + r + 1))
+    vals = []
+    for y in ys:
+        for x in xs:
+            try:
+                z = float(depth_img.get_distance(int(x), int(y)))
+            except Exception:
+                z = 0.0
+            if ignore_zeros and (z <= 0.0):
+                continue
+            if not np.isfinite(z) or z <= 0.0:
+                continue
+            if z < dmin or z > dmax:
+                continue
+            vals.append(z)
+    if not vals:
+        return np.nan
+    arr = np.array(vals, dtype=float)
+    if reducer == "mean":
+        return float(np.mean(arr))
+    # default median
+    return float(np.median(arr))
+
+
+def compute_joint_xyz_for_person(
+    person_kpts,
+    person_vis,
+    depth_img,
+    intrin_dict,
+    kpt_thr,
+    window_size=3,
+    reducer="median",
+    ignore_zeros=True,
+    depth_min=0.1,
+    depth_max=4.0,
+):
+    """
+    Compute per-joint XYZ (meters) for one person. NaN where invalid.
+    Depth is spatially denoised by reducing a window around each keypoint.
+    """
     joint_xyz = []
     H = depth_img.height
     W = depth_img.width
+
+    w = int(max(1, window_size))
+    if w % 2 == 0:
+        w += 1  # enforce odd
+
     for (x, y), v in zip(person_kpts, person_vis):
         if v > kpt_thr and 0 <= int(x) < W and 0 <= int(y) < H:
-            depth_val = depth_img.get_distance(int(x), int(y))
-            if depth_val and depth_val > 0:
-                joint_xyz.append(deproject(depth_val, x, y, intrin_dict))
+            z = _reduce_depth_window(
+                depth_img,
+                int(round(x)),
+                int(round(y)),
+                w=w,
+                ignore_zeros=bool(ignore_zeros),
+                reducer=str(reducer).lower(),
+                dmin=float(depth_min),
+                dmax=float(depth_max),
+            )
+            if np.isfinite(z) and z > 0.0:
+                joint_xyz.append(deproject(z, x, y, intrin_dict))
             else:
                 joint_xyz.append([np.nan, np.nan, np.nan])
         else:
@@ -42,19 +105,21 @@ def compute_joint_xyz_for_person(person_kpts, person_vis, depth_img, intrin_dict
     return np.array(joint_xyz)
 
 
-def compute_3d_skeletons(keypoints, visibility, depth_img, intrin_dict, kpt_thr):
-    """
-    Vector over people. Returns a list of (J,3) arrays (NaNs where invalid).
-    keypoints: [N, J, 2], visibility: [N, J]
-    """
+def compute_3d_skeletons(keypoints, visibility, depth_img, intrin_dict, kpt_thr,
+                         window_size=3, reducer="median", ignore_zeros=True,
+                         depth_min=0.1, depth_max=4.0):
+    """Vector over people. Returns a list of (J,3) arrays (NaNs where invalid)."""
     out = []
     for person_kpts, person_vis in zip(keypoints, visibility):
         out.append(compute_joint_xyz_for_person(
-            person_kpts, person_vis, depth_img, intrin_dict, kpt_thr))
+            person_kpts, person_vis, depth_img, intrin_dict, kpt_thr,
+            window_size=window_size, reducer=reducer, ignore_zeros=ignore_zeros,
+            depth_min=depth_min, depth_max=depth_max))
     return out
 
+
 def set_axes_equal(ax):
-    '''Set 3D plot axes to equal scale.'''
+    """Set 3D plot axes to equal scale."""
     x_limits = ax.get_xlim3d()
     y_limits = ax.get_ylim3d()
     z_limits = ax.get_zlim3d()
@@ -72,10 +137,11 @@ def set_axes_equal(ax):
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
+
 def visualize_3d_skeletons(joint_xyz_list, skeleton, show_kpt_subset, kpt_thr):
     """Matplotlib 3D scatter/lines for all people."""
     fig = plt.gcf()
-    fig.clf()  # Clear only the current figure (preserve window)
+    fig.clf()
     ax = fig.add_subplot(111, projection='3d')
     ax.set_title("3D Skeleton")
 
@@ -101,28 +167,23 @@ def visualize_3d_skeletons(joint_xyz_list, skeleton, show_kpt_subset, kpt_thr):
     ax.set_ylabel("Y (m)")
     ax.set_zlabel("Z (m)")
     ax.view_init(elev=-80, azim=-90)
-    plt.pause(0.001)  # Refresh the plot without blocking
+    plt.pause(0.001)
+
 
 def angle(p_a, p_b, p_c):
     """
     Angle at vertex B formed by segments A-B and C-B (degrees).
-
-    Each of p_a, p_b, p_c can be:
-      - a single point: shape (D,)
-      - a list/array of points: shape (K, D) -> averaged (NaN-safe) to (D,)
-
+    Each of p_a, p_b, p_c: shape (D,) or (K,D) -> averaged to (D,).
     Works for 2D, 3D, ... nD points.
     """
-
     def _avg_point(p):
         arr = np.asarray(p, dtype=float)
         if arr.ndim == 1:
             return arr
         elif arr.ndim == 2:
-            # average multiple points; ignores NaNs if present
             return np.nanmean(arr, axis=0)
         else:
-            raise ValueError("Each input must be shape (D,) or (K, D).")
+            raise ValueError("Each input must be shape (D,) or (K,D).")
 
     A = _avg_point(p_a)
     B = _avg_point(p_b)
@@ -140,5 +201,63 @@ def angle(p_a, p_b, p_c):
     u /= nu
     v /= nv
     cosang = np.clip(np.dot(u, v), -1.0, 1.0)
-    raw = np.degrees(np.arccos(cosang))  # 0 = aligned, 180 = opposite
+    raw = np.degrees(np.arccos(cosang))
     return raw
+
+
+# -------- Vector-pair helpers (no triplets anywhere) --------
+
+def resolve_point(points, spec):
+    """
+    Fetch a single point from an int id or list[int] spec.
+    points: np.ndarray (J,2) or (J,3).
+    Returns a (D,) array. NaN-safe mean for lists. np.nan vector if invalid.
+    """
+    arr = np.asarray(points, dtype=float)
+    D = arr.shape[1] if arr.ndim == 2 else 0
+    if D not in (2, 3):
+        return np.array([np.nan, np.nan, np.nan]) if D == 3 else np.array([np.nan, np.nan])
+
+    def _one(idx):
+        try:
+            idx = int(idx)
+            if idx < 0 or idx >= arr.shape[0]:
+                return None
+            p = arr[idx]
+            if not np.all(np.isfinite(p)):
+                return None
+            return p
+        except Exception:
+            return None
+
+    if isinstance(spec, (list, tuple)):
+        pts = [p for p in (_one(i) for i in spec) if p is not None]
+        if not pts:
+            return np.full((D,), np.nan, dtype=float)
+        return np.nanmean(np.vstack(pts), axis=0)
+    else:
+        p = _one(spec)
+        if p is None:
+            return np.full((D,), np.nan, dtype=float)
+        return p
+
+
+def angle_from_vecpair(points, pair):
+    """
+    Compute the angle between two segments defined by a vector-pair.
+    pair = [[P0,P1],[Q0,Q1]], each an int or list[int].
+    points: (J,2) or (J,3).
+    Returns degrees in [0,180] or np.nan.
+    """
+    try:
+        (P0, P1), (Q0, Q1) = pair
+    except Exception:
+        return np.nan
+
+    A = resolve_point(points, P1)  # map to angle(A,B,C) form: B is shared origin
+    B = resolve_point(points, P0)
+    C = resolve_point(points, Q1)
+
+    if A.shape != B.shape or B.shape != C.shape:
+        return np.nan
+    return angle(A, B, C)
