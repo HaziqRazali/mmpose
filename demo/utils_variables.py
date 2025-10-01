@@ -3,6 +3,9 @@ import sys
 sys.path.append(os.path.join(os.path.expanduser("~"), "mmpose/configs/_base_/datasets/"))
 import coco_wholebody as cw  # reference only
 
+# joint names to id mapping
+# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
+
 # ---------- Special visualization subsets ----------
 
 full_body = [
@@ -32,7 +35,7 @@ _rom_single_vectors = {
     "right_elbow_flexion":  [[8, 6], [8, 10]],
 
     # shoulder flexion/abduction use spine proxy [[shoulder, wrist], [mid-shoulders, mid-hips]]
-    "left_shoulder_flexion":        [[5, 7], [[5, 6], [11, 12]]],
+    "left_shoulder_flexion":        [[5, 7], [5, 11]],
     "right_shoulder_flexion":       [[6, 8], [[5, 6], [11, 12]]],
     "left_shoulder_abduction":      [[5, 7], [[5, 6], [11, 12]]],
     "right_shoulder_abduction":     [[6, 8], [[5, 6], [11, 12]]],

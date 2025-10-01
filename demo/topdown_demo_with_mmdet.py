@@ -257,6 +257,7 @@ def _angle_from_vecpair_auto(kpts_xy, kpt_scores, joint_xyz, pair, kpt_thr):
             u = A - B
             v = C - B
             nu, nv = np.linalg.norm(u), np.linalg.norm(v)
+            #print("P0", B, "P1", A, "Q1", C, "len(u)", nu, "len(v)", nv)
             if nu > 1e-6 and nv > 1e-6:
                 u /= nu; v /= nv
                 cosang = float(np.clip(np.dot(u, v), -1.0, 1.0))
@@ -399,6 +400,7 @@ def process_one_image(args, color_img, depth_img, detector, pose_estimator, visu
                 vecpairs[0],
                 args.kpt_thr
             )
+
             if ANGLE_MODE == "median":
                 ang_disp, src_disp = _append_and_disp_from_buf(ANGLE_BUF, ang, src)
             elif ANGLE_MODE == "moving_average":
@@ -684,8 +686,7 @@ def main():
     parser.add_argument("--rom_test", default="full_body")
 
     # New flag: ROM-only visualization
-    parser.add_argument("--only-rom-lines", dest="only_rom_lines", action="store_true",
-                        help="If set, hide skeleton for specific ROM tests and draw only the two ROM vectors.")
+    parser.add_argument("--only-rom-lines", dest="only_rom_lines", action="store_true", help="If set, hide skeleton for specific ROM tests and draw only the two ROM vectors.")
     parser.set_defaults(only_rom_lines=False)
 
     # --- depth back-projection args ---

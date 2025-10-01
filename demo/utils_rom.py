@@ -353,6 +353,7 @@ def compute_rom_for_pair(
     a2L, src2L = _angle_from_vecpair_auto(pose2, vecpairs[0])
     a1R, src1R = _angle_from_vecpair_auto(pose1, vecpairs[1])
     a2R, src2R = _angle_from_vecpair_auto(pose2, vecpairs[1])
+    #print(f"[DEBUG] test={test_name}  L: {a1L}->{a2L} src=({src1L},{src2L})  R: {a1R}->{a2R} src=({src1R},{src2R})")
 
     dL = None if (a1L is None or a2L is None) else float(abs(a2L - a1L))
     dR = None if (a1R is None or a2R is None) else float(abs(a2R - a1R))
