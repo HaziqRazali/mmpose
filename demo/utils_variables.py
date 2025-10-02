@@ -39,6 +39,8 @@ _rom_single_vectors = {
     "right_shoulder_flexion":       [[6, 8], [[5, 6], [11, 12]]],
     "left_shoulder_abduction":      [[5, 7], [[5, 6], [11, 12]]],
     "right_shoulder_abduction":     [[6, 8], [[5, 6], [11, 12]]],
+    "left_shoulder_extension":      [[5, 7], [5, 11]],
+    "right_shoulder_extension":      [[5, 7], [5, 11]],
 
     # shoulder rotation placeholders
     "left_shoulder_external_rotation":  [[7, 5], [7, 9]],
@@ -58,22 +60,6 @@ _rom_single_vectors = {
     "left_ankle_plantarflexion":   [[15, 13], [15, [17, 18]]],
     "right_ankle_plantarflexion":  [[16, 14], [16, [20, 21]]],
 }
-
-def _flatten_unique(seq):
-    out, seen = [], set()
-    def _walk(x):
-        if isinstance(x, (list, tuple)):
-            for xi in x:
-                _walk(xi)
-        else:
-            try:
-                v = int(x)
-            except Exception:
-                return
-            if v not in seen:
-                seen.add(v); out.append(v)
-    _walk(seq)
-    return out
 
 CATEGORY_SIDES = {
     "elbow_flexion": {"left":"left_elbow_flexion","right":"right_elbow_flexion","both":"elbow_flexion"},

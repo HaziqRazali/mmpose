@@ -35,6 +35,15 @@ python demo/topdown_demo_with_mmdet.py \
   --tasks /home/haziq/datasets/telept/data/ipad/20251001-hh/frames_1759295456074.json \
   --no-show
 
+python demo/topdown_demo_with_mmdet.py \
+  demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
+  configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
+  --input /home/haziq/datasets/telept/data/ipad/20251001-hh/rgb_1759295456074.mp4 \
+  --rom-test left_elbow_flexion \
+  --t1 00:00:05.000 --t2 00:00:32.000 \
+  --rom-out angles_left_elbow.csv
 
 # home desktop + creative
 python demo/topdown_demo_with_mmdet.py \
