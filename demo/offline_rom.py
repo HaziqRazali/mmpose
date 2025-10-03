@@ -1,29 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Coordinator: ROM at one or two timestamps with optional iPad depth ZIP (index-ratio sync).
-
-Responsibilities:
-  - CLI + I/O (open video/depth, clamp times)
-  - Load detection + pose models
-  - Grab frame(s) at t1 (and t2 if needed), fetch depth by index-ratio
-  - Run detectors.run_once()
-  - Compute ROM via calculators.compute()
-  - Build JSON report
-  - Visualize: panel headers, optional vec-pair overlay per presets + draw policy,
-               optional ROM-specific drawers, optional depth side panels.
-
-Assumes project modules on PYTHONPATH under `utils/`:
-  utils/presets.py            -> needs_t2, get_vectors_for_preset, draw_policy, DRAW_*
-  utils/ipad_depthio.py       -> DepthZip, depth_to_vis
-  utils/detectors.py          -> run_once, draw_bboxes
-  utils/calculators.py        -> compute()
-  utils/viz.py                -> annotate_panel, draw_vectors2d, stack_side_by_side,
-                                 VizContext, draw_for_rom, _CUSTOM_DRAWERS
-  utils/drawers_*.py          -> optional; import side-effect registers drawers
-"""
-
 import argparse
 import json
 from pathlib import Path
@@ -46,6 +23,14 @@ from utils.viz import annotate_panel, draw_vectors2d, stack_side_by_side, VizCon
 # Import drawers once so they self-register
 import utils.drawers_internal_rotation  # noqa: F401
 import utils.drawers_segments           # noqa: F401
+
+# --- 3D point cloud + 3D viz twin ---
+from utils.pcd import build_point_cloud, keypoints3d_from_kxy, make_offset_transform
+from utils.viz3d import VizContext3D, draw_for_rom_3d, show_in_one_window, make_axis
+
+# Import 3D drawers once so they self-register
+import utils.drawers3d_segments          # noqa: F401
+import utils.drawers3d_internal_rotation # noqa: F401
 
 # ---------------- Time + video I/O ----------------
 
@@ -95,6 +80,7 @@ def main():
     ap.add_argument("det_checkpoint")
     ap.add_argument("pose_config")
     ap.add_argument("pose_checkpoint")
+
     ap.add_argument("--input", required=True, help="RGB video path")
     ap.add_argument("--rom-test", required=True, help="ROM name (see presets.py)")
     ap.add_argument("--t1", required=True, help="HH:MM:SS[.ms]")
@@ -108,6 +94,13 @@ def main():
     ap.add_argument("--save-frames", action="store_true")
     ap.add_argument("--out-dir", default="")
     ap.add_argument("--debug-boxes", action="store_true", help="Draw all detected person boxes")
+
+    # 3D visualization (Open3D) options
+    ap.add_argument("--show-3d", action="store_true", help="Open a 3D viewer with point cloud(s) + ROM overlays.")
+    ap.add_argument("--show-3d-both", action="store_true", help="If ROM needs t2 and depth exists, render t1 + t2 in one window.")
+    ap.add_argument("--pcd-max-depth", type=float, default=None, help="Clip depth > this (meters) when building point clouds.")
+    ap.add_argument("--pcd-voxel", type=float, default=0.0, help="Viewer-side downsample voxel size in meters (0 disables).")
+    ap.add_argument("--t2-offset", type=float, default=0.25, help="Translation in +X (meters) to display t2 beside t1 in the same window.")
     args = ap.parse_args()
 
     rom = args.rom_test
@@ -198,7 +191,8 @@ def main():
     mode_used = result.mode_used
 
     # --- outputs
-    out_dir = Path(args.out_dir) if args.out_dir else video_path.parent / f"{video_path.stem}_rom_eval"
+    # /home/haziq/datasets/telept/data/ipad/20251001-hh rgb_1759295456074
+    out_dir = Path(args.out_dir) if args.out_dir else video_path.parent / f"{video_path.stem}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     report = {
@@ -303,8 +297,113 @@ def main():
         out_img = out_dir / f"{video_path.stem}_{rom}_{'t1t2' if needs_second else 't1'}_panel.jpg"
         cv2.imwrite(str(out_img), combined)
 
-    print(json.dumps(report, indent=2))
+    #print(json.dumps(report, indent=2))
 
+    # ---------------- 3D visualization (Open3D) ----------------
+    if args.show_3d and dz is not None:
+        geoms = []
+
+        # Small origin axis (for reference)
+        try:
+            axis = make_axis(length=0.1)
+            geoms.append(axis)
+        except Exception as _e:
+            axis = None  # Open3D missing, will raise later when building pcd
+
+        # Build t1 point cloud (all pixels), optional voxel downsample via --pcd-voxel
+        pcd_t1 = None
+        kpts3d_t1 = None
+        try:
+            pcd_t1 = build_point_cloud(
+                d1, f1, (rgb_w, rgb_h),
+                max_depth=args.pcd_max_depth,
+                voxel_size=(args.pcd_voxel if args.pcd_voxel and args.pcd_voxel > 0 else None),
+                tint=None,
+                transform=None
+            ) if d1 is not None else None
+
+            # 3D keypoints for vec/overlays at t1 (uses same depth sampling rules as geometry.py)
+            kpts3d_t1 = keypoints3d_from_kxy(k1, d1, (rgb_w, rgb_h), median_k=args.median_k) if d1 is not None else None
+
+        except ImportError as e:
+            raise SystemExit(f"Open3D not available for 3D viz (--show-3d). Error: {e}")
+
+        # Determine if we should draw 3D default vec-pair (mirror 2D policy computed earlier)
+        vec_pair_3d = vec_pair if should_draw_vec else None
+
+        # Per-ROM specialized 3D overlays for t1
+        ctx3d_t1 = None
+        if kpts3d_t1 is not None:
+            ctx3d_t1 = VizContext3D(
+                rom_name=rom,
+                when_label="t1",
+                kpts3d=kpts3d_t1,
+                vec_pair=vec_pair_3d,
+                pcd=pcd_t1,
+                median_k=args.median_k
+            )
+            # Draw default vec-pair in 3D if allowed
+            from utils.viz3d import draw_vectors3d
+            draw_vectors3d(ctx3d_t1)
+            # Specialized 3D drawer (if registered)
+            draw_for_rom_3d(rom, ctx3d_t1)
+
+        # Add t1 geometries
+        if pcd_t1 is not None:
+            geoms.append(pcd_t1)
+        if ctx3d_t1 is not None and ctx3d_t1.overlays:
+            geoms.extend(ctx3d_t1.overlays)
+
+        # Optionally add t2 cloud + overlays in the same window, offset by +X
+        if needs_second and args.show_3d_both and (d2 is not None) and (f2 is not None):
+            T = make_offset_transform(dx=args.t2_offset, dy=0.0, dz=0.0)
+
+            try:
+                pcd_t2 = build_point_cloud(
+                    d2, f2, (rgb_w, rgb_h),
+                    max_depth=args.pcd_max_depth,
+                    voxel_size=(args.pcd_voxel if args.pcd_voxel and args.pcd_voxel > 0 else None),
+                    tint=(0.9, 0.9, 0.9),  # subtle tint so t2 is distinguishable
+                    transform=T
+                )
+
+                kpts3d_t2 = keypoints3d_from_kxy(k2, d2, (rgb_w, rgb_h), median_k=args.median_k)
+
+            except ImportError as e:
+                raise SystemExit(f"Open3D not available for 3D viz (--show-3d). Error: {e}")
+
+            ctx3d_t2 = VizContext3D(
+                rom_name=rom,
+                when_label="t2",
+                kpts3d=kpts3d_t2,
+                vec_pair=vec_pair_3d,  # same policy: draw if allowed and no 3D-specialized override
+                pcd=pcd_t2,
+                median_k=args.median_k
+            )
+            from utils.viz3d import draw_vectors3d
+            draw_vectors3d(ctx3d_t2)
+            draw_for_rom_3d(rom, ctx3d_t2)
+
+            geoms.append(pcd_t2)
+            if ctx3d_t2.overlays:
+                # also offset overlay primitives by T (apply in-place transform when possible)
+                # LineSets have points we can transform manually:
+                import numpy as _np
+                for g in ctx3d_t2.overlays:
+                    if hasattr(g, "points"):
+                        P = _np.asarray(g.points)
+                        P_h = _np.concatenate([P, _np.ones((P.shape[0], 1), dtype=P.dtype)], axis=1)
+                        P_t = (T @ P_h.T).T[:, :3]
+                        # write back transformed points to this overlay
+                        g.points = type(g.points)(P_t)
+                geoms.extend(ctx3d_t2.overlays)
+
+        # Finally: show everything in one window
+        if geoms:
+            show_in_one_window(
+                geoms,
+                title=f"ROM 3D: {rom} ({'t1+t2' if (needs_second and args.show_3d_both) else 't1'})"
+            )
 
 if __name__ == "__main__":
     main()

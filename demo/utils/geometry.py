@@ -138,7 +138,8 @@ def angle3d_between_segments_across_frames(k1, k2, d1, d2, rgb_size, median_k=5,
 
     SH1, EL1 = pt3d(k1,j_sh,w1,h1,depth1,fx1,fy1,ox1,oy1), pt3d(k1,j_el,w1,h1,depth1,fx1,fy1,ox1,oy1)
     SH2, EL2 = pt3d(k2,j_sh,w2,h2,depth2,fx2,fy2,ox2,oy2), pt3d(k2,j_el,w2,h2,depth2,fx2,fy2,ox2,oy2)
-    if None in (SH1,EL1,SH2,EL2): return None
+    if any(p is None for p in (SH1, EL1, SH2, EL2)): 
+        return None
     v1, v2 = EL1-SH1, EL2-SH2
     n1,n2 = np.linalg.norm(v1),np.linalg.norm(v2)
     if n1<1e-6 or n2<1e-6: return None
