@@ -45,8 +45,8 @@ JOBS5=(
 # Comment out lines below to skip whole blocks
 JOBS=(
   "${JOBS1[@]}"
-  # "${JOBS2[@]}"
-  # "${JOBS3[@]}"
+  "${JOBS2[@]}"
+  "${JOBS3[@]}"
   # "${JOBS4[@]}"
   # "${JOBS5[@]}"
 )
