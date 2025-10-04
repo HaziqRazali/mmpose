@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--t1", required=True, help="HH:MM:SS[.ms]")
     ap.add_argument("--t2", required=False, default="00:00:00.000", help="HH:MM:SS[.ms]")
     ap.add_argument("--depth", default="", help="Optional depth zip path: depth_<id>.zip")
-    ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--device", default="cpu")
     ap.add_argument("--score-thr", type=float, default=0.3)
     ap.add_argument("--det-cat-id", type=int, default=0)
     ap.add_argument("--median-k", type=int, default=5)
