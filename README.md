@@ -57,6 +57,20 @@
     <img src="https://user-images.githubusercontent.com/25839884/219026120-ba71e48b-6e94-4bd4-b4e9-b7d175b5e362.png" width="3%" alt="" /></a>
 </div>
 
+## Install Guide
+
+```
+conda create -n openmmlab python=3.8 -y
+conda activate openmmlab
+conda install pytorch==2.1.0 torchvision torchaudio cpuonly -c pytorch
+pip install mmcv==2.1.0
+pip install mmdet==3.3.0
+git clone https://github.com/HaziqRazali/mmpose
+cd mmpose
+pip install -r requirements.txt
+pip install -v -e .
+```
+
 ## Introduction
 
 English | [简体中文](README_CN.md)
