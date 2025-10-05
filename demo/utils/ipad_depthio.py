@@ -7,12 +7,54 @@ Handles .zip archives of frame_*.bin depth frames.
 import re, zipfile
 import numpy as np
 import cv2
+import logging
 from pathlib import Path
 
 _HEADER_RE = re.compile(
     rb'^(timestamp|width|height|data_length|fx|fy|ox|oy)\s*:\s*([0-9\.\-eE]+)\s*$',
     re.M
 )
+
+def _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy):
+    """
+    If principal point is outside the image, try to infer anisotropic resize scales
+    and scale (fx, fy, ox, oy) to the current (w, h).
+
+    Returns: fx, fy, ox, oy, meta_dict
+    """
+    meta = {}
+    inside = (0.0 < ox < w) and (0.0 < oy < h)
+    if inside:
+        meta['intrinsics_autoscaled'] = False
+        return fx, fy, ox, oy, meta
+
+    # Heuristic: assume original intrinsics were for some (W0,H0), then image was resized
+    # non-uniformly to (w,h). If the resize roughly preserved the center, then:
+    #   sx ≈ w / (2*ox_orig), sy ≈ h / (2*oy_orig)
+    # Here we only have current (w,h) and header (ox,oy) that are clearly too big,
+    # so estimate scale to bring the principal point near image center.
+    sx = (w / (2.0 * ox)) if ox > 0 else np.nan
+    sy = (h / (2.0 * oy)) if oy > 0 else np.nan
+
+    ok = (np.isfinite(sx) and 0.2 <= sx <= 2.5) and (np.isfinite(sy) and 0.2 <= sy <= 2.5)
+    if not ok:
+        meta['intrinsics_autoscaled'] = False
+        meta['intrinsics_warning'] = "Header intrinsics out of bounds; unable to auto-fix."
+        logging.warning(meta['intrinsics_warning'] + f" (w={w},h={h}, fx={fx},fy={fy}, ox={ox},oy={oy})")
+        return fx, fy, ox, oy, meta
+
+    fx2, fy2 = fx * sx, fy * sy
+    ox2, oy2 = ox * sx, oy * sy
+    meta.update({
+        'intrinsics_autoscaled': True,
+        'scale_x': float(sx),
+        'scale_y': float(sy),
+        'fx_before': float(fx), 'fy_before': float(fy),
+        'ox_before': float(ox), 'oy_before': float(oy),
+    })
+    logging.info(f"[ipad_depthio] autoscaled intrinsics: "
+                 f"({fx},{fy},{ox},{oy}) -> ({fx2},{fy2},{ox2},{oy2}) for frame {w}x{h}")
+    return fx2, fy2, ox2, oy2, meta
 
 class DepthZip:
     """Stream depth frames from a ZIP of frame_*.bin files; normalize timestamps for reporting."""
@@ -84,14 +126,25 @@ class DepthZip:
         ts_abs = float(hmap['timestamp'])
         ts_norm = ts_abs - self.base_ts
 
-        return {
+        # intrinsics from header
+        fx = float(hmap['fx']); fy = float(hmap['fy'])
+        ox = float(hmap['ox']); oy = float(hmap['oy'])
+
+        # auto-fix intrinsics if they don't fit (w,h)
+        fx, fy, ox, oy, meta = _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy)
+
+        return_data = {
             'depth': depth,
             'ts_sec_abs': ts_abs,
             'ts_sec_norm': ts_norm,
             'h': h, 'w': w,
-            'fx': float(hmap['fx']), 'fy': float(hmap['fy']),
-            'ox': float(hmap['ox']), 'oy': float(hmap['oy']),
+            'fx': fx, 'fy': fy, 'ox': ox, 'oy': oy,
+            #**meta
         }
+        #print(return_data['fx'], return_data['fy'])
+        #print(return_data['ox'], return_data['oy'])
+        #sys.exit()
+        return return_data
 
     @property
     def sizes(self): return self._sizes

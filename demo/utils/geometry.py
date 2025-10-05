@@ -67,7 +67,11 @@ def _median_depth_at(depth: np.ndarray, u: float, v: float, k: int = 5) -> float
 
 def _rgbkpt_to_depth_xy(u_rgb, v_rgb, rgb_w, rgb_h, depth_w, depth_h):
     """Map pixel from RGB space to depth space."""
-    su = depth_w / float(rgb_w); sv = depth_h / float(rgb_h)
+    su = depth_w / float(rgb_w); 
+    sv = depth_h / float(rgb_h)
+    #print(su, depth_w, rgb_w)
+    #print(sv, depth_h, rgb_h)
+    #sys.exit()
     return u_rgb * su, v_rgb * sv
 
 def _backproject(u, v, Z, fx, fy, ox, oy):

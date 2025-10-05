@@ -24,6 +24,35 @@ def _require_o3d():
             f"Original import error: {_IMPORT_ERR}"
         )
 
+def make_cylinder_line(P0, P1, radius=0.02, color=(1, 1, 0)):
+    """
+    Build a cylinder from P0 to P1 (meters). Returns an Open3D TriangleMesh.
+    """
+    import open3d as o3d
+    v = P1 - P0
+    L = float(np.linalg.norm(v))
+    if L < 1e-8:
+        return None
+    v_dir = v / L
+
+    # create a unit cylinder aligned with +Z, then rotate to v_dir, then translate
+    cyl = o3d.geometry.TriangleMesh.create_cylinder(radius=radius, height=L, resolution=24, split=1)
+    cyl.compute_vertex_normals()
+    cyl.paint_uniform_color(color)
+
+    z = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    axis = np.cross(z, v_dir)
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm < 1e-8:
+        R = np.eye(3)
+    else:
+        axis /= axis_norm
+        angle = float(np.arccos(np.clip(np.dot(z, v_dir), -1.0, 1.0)))
+        R = o3d.geometry.get_rotation_matrix_from_axis_angle(axis * angle)
+
+    cyl.rotate(R, center=np.array([0.0, 0.0, 0.0]))
+    cyl.translate(P0 + 0.5 * v)  # cylinder is centered; shift to midpoint
+    return cyl
 
 # ------------------------
 # 3D drawer registry
@@ -96,11 +125,12 @@ def _make_lineset(points: np.ndarray,
     return ls
 
 
-def draw_vectors3d(ctx: VizContext3D, thickness_ignored: int = 3):
+def draw_vectors3d(ctx: VizContext3D, radius: float = 0.002):
     """
     Draw two 3D vectors defined by keypoints:
       vec_pair = [[P0, P1], [Q0, Q1]],
-    colored to match 2D style: first vector BLUE, second GREEN.
+    but using cylinders instead of LineSets for real 3D thickness.
+    First vector = BLUE, second = GREEN.
     """
     if ctx.vec_pair is None:
         return
@@ -121,17 +151,25 @@ def draw_vectors3d(ctx: VizContext3D, thickness_ignored: int = 3):
     A = get3(P0); B = get3(P1)
     C = get3(Q0); D = get3(Q1)
 
+    # use the existing make_cylinder_line() helper above
     geoms: List[any] = []
 
     if _point_ok(A) and _point_ok(B):
-        pts = np.stack([A, B], axis=0)
-        geoms.append(_make_lineset(pts, [(0, 1)], (0.0, 0.0, 1.0)))  # BLUE
+        length1 = float(np.linalg.norm(A - B))
+        print(f"[3D Vec] {ctx.rom_name} - First vector length: {length1:.3f} m")
+        cyl1 = make_cylinder_line(A.astype(np.float64), B.astype(np.float64), radius=radius, color=(0.0, 0.0, 1.0))
+        if cyl1 is not None:
+            geoms.append(cyl1)
 
     if _point_ok(C) and _point_ok(D):
-        pts = np.stack([C, D], axis=0)
-        geoms.append(_make_lineset(pts, [(0, 1)], (0.0, 0.78, 0.0)))  # GREEN
+        length2 = float(np.linalg.norm(C - D))
+        print(f"[3D Vec] {ctx.rom_name} - Second vector length: {length2:.3f} m")
+        cyl2 = make_cylinder_line(C.astype(np.float64), D.astype(np.float64), radius=radius, color=(0.0, 0.78, 0.0))
+        if cyl2 is not None:
+            geoms.append(cyl2)
 
     ctx.overlays.extend(geoms)
+
 
 
 def make_axis(length: float = 0.1):
