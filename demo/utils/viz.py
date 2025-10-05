@@ -41,8 +41,8 @@ def annotate_panel(frame_rgb,
                    rgb_pos_sec,
                    scale: float = 0.7):
     # compact header
-    line1 = f"{when_label} • {rom_name}"
-    line2 = f"Mode: {mode_used}" + (f" • Angle: {angle_deg:.1f}°" if angle_deg is not None else "")
+    line1 = f"{when_label} | {rom_name}"
+    line2 = f"Mode: {mode_used}" + (f" | Angle: {angle_deg:.1f} deg" if angle_deg is not None else "")
     line3 = (f"RGB: {rgb_pos_sec:.3f}s" if rgb_pos_sec is not None else None)
     lines = [line1, line2] + ([line3] if line3 else [])
     return overlay_text(frame_rgb, lines, scale=scale)

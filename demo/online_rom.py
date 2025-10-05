@@ -17,18 +17,16 @@ from mmpose.apis import init_model as init_pose_model, inference_topdown
 from mmpose.structures import merge_data_samples
 from mmpose.utils import adapt_mmdet_pipeline
 
-# -----------------------------------------------------------------------------
-# project imports
-# -----------------------------------------------------------------------------
+# ---------------- State ----------------
+STATE = {"live_pose": False}
+RESULT = {"rom": None, "angle": None, "mode": "n/a"}  # used to annotate t1/t2 after compute
+
+# -------------- Project imports --------------
 DEMO_DIR = "/home/haziq/mmpose/demo"
 if DEMO_DIR not in sys.path:
     sys.path.insert(0, DEMO_DIR)
 
-from utils import presets
-from utils import calculators
-from utils import viz
-
-# auto-register any custom drawers
+from utils import presets, calculators, viz
 try:
     import utils.drawers_internal_rotation  # noqa: F401
 except Exception:
@@ -38,11 +36,7 @@ try:
 except Exception:
     pass
 
-# -----------------------------------------------------------------------------
-# state
-# -----------------------------------------------------------------------------
-RESULT = {"rom": None, "angle": None, "mode": "n/a"}  # shown on preview after pressing 3
-
+# -------------- Data holders --------------
 @dataclass
 class Snapshot:
     image_bgr: np.ndarray
@@ -50,9 +44,7 @@ class Snapshot:
     bbox_xyxy: Tuple[int, int, int, int]
     timestamp: float
 
-# -----------------------------------------------------------------------------
-# helpers
-# -----------------------------------------------------------------------------
+# -------------- Helpers --------------
 def switch_scope(name: str):
     init_default_scope(name)
     try:
@@ -61,7 +53,7 @@ def switch_scope(name: str):
         pass
 
 def largest_person_bbox(det_result, min_score=0.35):
-    # mmdet 3.x -> DetDataSample
+    # mmdet 3.x → DetDataSample
     if isinstance(det_result, DetDataSample):
         inst = det_result.pred_instances
         if inst is None or not hasattr(inst, "bboxes"):
@@ -86,7 +78,6 @@ def largest_person_bbox(det_result, min_score=0.35):
 
     if cand.shape[0] == 0:
         return None
-
     areas = (cand[:, 2] - cand[:, 0]) * (cand[:, 3] - cand[:, 1])
     scores = cand[:, 4] if cand.shape[1] >= 5 else np.ones((cand.shape[0],), float)
     areas[scores < min_score] = -1
@@ -115,19 +106,24 @@ def capture_snapshot(frame_bgr: np.ndarray, det_model, pose_model) -> Optional[S
     if bb is None:
         return None
     x1, y1, x2, y2, _ = bb
-
     kpts = run_pose_on_bbox(pose_model, frame_bgr, (x1, y1, x2, y2))
     if kpts is None:
         return None
-
     return Snapshot(frame_bgr.copy(), kpts.copy(), (x1, y1, x2, y2), time.time())
 
-# -----------------------------------------------------------------------------
-# preview panels
-# -----------------------------------------------------------------------------
+def estimate_pose_once(frame_bgr, det_model, pose_model):
+    switch_scope("mmdet")
+    det = inference_detector(det_model, frame_bgr)
+    bb = largest_person_bbox(det, min_score=0.35)
+    if bb is None: return None, None
+    x1, y1, x2, y2, _ = bb
+    kpts = run_pose_on_bbox(pose_model, frame_bgr, (x1, y1, x2, y2))
+    return kpts, (x1, y1, x2, y2)
+
+# -------------- Preview panels --------------
 def build_panel_from_snapshot(s: Optional[Snapshot], rom_name: str, when_label: str,
                               angle_deg: Optional[float] = None, mode_used: str = "n/a") -> np.ndarray:
-    H, W = 720, 1280  # big preview canvas
+    H, W = 720, 1280  # large, clean canvas
     pane = np.zeros((H, W, 3), np.uint8)
 
     if s is None:
@@ -141,7 +137,6 @@ def build_panel_from_snapshot(s: Optional[Snapshot], rom_name: str, when_label: 
     resized = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
     pane[:resized.shape[0], :resized.shape[1]] = resized
 
-    # default vec-pair overlay (always draw), then custom drawer
     vec_pairs = presets.get_vectors_for_preset(rom_name)
     if vec_pairs:
         k = s.keypoints.copy()
@@ -164,22 +159,17 @@ def build_panel_from_snapshot(s: Optional[Snapshot], rom_name: str, when_label: 
     return viz.annotate_panel(pane, rom_name, mode_used, when_label, angle_deg, None)
 
 def show_preview(rom_name: str, t1: Optional[Snapshot], t2: Optional[Snapshot]):
-    # pass the last computed result (if it matches this ROM)
     angle = RESULT["angle"] if RESULT["rom"] == rom_name else None
     mode  = RESULT["mode"]  if RESULT["rom"] == rom_name else "n/a"
-
     if presets.needs_t2(rom_name):
         L = build_panel_from_snapshot(t1, rom_name, "t1", angle, mode)
         R = build_panel_from_snapshot(t2, rom_name, "t2", angle, mode)
         panel = viz.stack_side_by_side(L, R)
     else:
         panel = build_panel_from_snapshot(t1, rom_name, "t1", angle, mode)
-
     cv2.imshow("ROM Preview (t1 / t2)", panel)
 
-# -----------------------------------------------------------------------------
-# compute
-# -----------------------------------------------------------------------------
+# -------------- Compute --------------
 def compute_and_overlay(rom_name, t1, t2, live_frame):
     need_t2 = presets.needs_t2(rom_name)
     if t1 is None:
@@ -204,19 +194,16 @@ def compute_and_overlay(rom_name, t1, t2, live_frame):
         else:
             mode = getattr(res, "mode_used", "n/a")
             RESULT.update({"rom": rom_name, "angle": float(angle), "mode": mode})
-            msg = f"RESULT — {rom_name}: {angle:.2f}°  [{mode}]"
+            msg = f"RESULT — {rom_name}: {angle:.2f} deg  [{mode}]"
             print(msg); viz.overlay_text(live_frame, [msg], org=(20, 90))
-            # refresh preview immediately so t1/t2 shows the result
-            show_preview(rom_name, t1, t2)
+            show_preview(rom_name, t1, t2)  # refresh preview with result
     except Exception as e:
         msg = f"Compute blocked: {e}"
         print(msg); viz.overlay_text(live_frame, [msg], org=(20, 90))
 
     cv2.imshow("ONLINE ROM (Live)", live_frame)
 
-# -----------------------------------------------------------------------------
-# camera helpers
-# -----------------------------------------------------------------------------
+# -------------- Camera helpers --------------
 def try_open_cam(index: int, width: int, height: int, backends: List[int]) -> Optional[cv2.VideoCapture]:
     for be in backends:
         cap = cv2.VideoCapture(index, be)
@@ -242,9 +229,7 @@ def open_any_camera(preferred: int, width: int, height: int) -> cv2.VideoCapture
         if cap: print(f"[camera] Selected index {idx}"); return cap
     raise SystemExit("Could not open any /dev/video* device.")
 
-# -----------------------------------------------------------------------------
-# main
-# -----------------------------------------------------------------------------
+# -------------- Main --------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cam", type=int, default=0)
@@ -262,7 +247,7 @@ def main():
     det_model = init_detector(args.det_cfg, args.det_ckpt, device=args.device)
     init_default_scope("mmpose")
     pose_model = init_pose_model(args.pose_cfg, args.pose_ckpt, device=args.device)
-    pose_model.cfg = adapt_mmdet_pipeline(pose_model.cfg)  # single-arg signature locally
+    pose_model.cfg = adapt_mmdet_pipeline(pose_model.cfg)  # local single-arg signature
     print("[init] Models loaded.")
 
     cap = open_any_camera(args.cam, args.width, args.height)
@@ -283,7 +268,7 @@ def main():
     cv2.resizeWindow(PREV_WIN, 1280, 720)
 
     fps_hist, t_prev = [], time.time()
-    print("[run] [ / ] switch ROM | 1=t1 | 2=t2 | 3=compute | q=quit")
+    print("[run] [ / ] switch ROM | 1=t1 | 2=t2 | 3=compute | p=live | q=quit")
 
     while True:
         ok, frame = cap.read()
@@ -292,10 +277,11 @@ def main():
             time.sleep(0.01)
             continue
 
-        # separate buffers: raw for capture, disp for HUD
-        frame_raw = frame.copy()
-        frame_disp = frame.copy()
+        # Clean vs Display buffers
+        frame_raw = frame.copy()   # capture/live-pose source (no HUD)
+        frame_disp = frame.copy()  # live window (HUD and any transient messages)
 
+        # FPS
         t_now = time.time()
         dt = t_now - t_prev; t_prev = t_now
         fps = 1.0 / dt if dt > 1e-3 else 0.0
@@ -305,22 +291,46 @@ def main():
         rom = rom_names[idx]
         need_t2 = presets.needs_t2(rom)
 
-        hud = [
-            f"ROM: {rom}",
-            "[ / ] prev/next   1 t1   2 t2   3 compute   q quit",
-            f"FPS: {fps_avg:5.1f}",
-            "Note: 2 is ignored (single-pose ROM)." if not need_t2 else "",
-        ]
-        viz.overlay_text(frame_disp, [h for h in hud if h], org=(20, 40))
+        # --- Live pose (optional) ---
+        live_ang = None
+        if STATE["live_pose"]:
+            k_live, bb = estimate_pose_once(frame_raw, det_model, pose_model)
+            if k_live is not None:
+                vec_pairs = presets.get_vectors_for_preset(rom)
+                if vec_pairs:
+                    frame_disp = viz.draw_vectors2d(frame_disp, k_live, vec_pairs[0], thickness=2)
+                if not need_t2:
+                    try:
+                        H, W = frame_disp.shape[:2]
+                        res = calculators.compute(rom, k_live, None, None, None, rgb_size=(W, H), median_k=3)
+                        live_ang = getattr(res, "ang1_deg", None)
+                    except Exception:
+                        pass
 
-        # preview (no HUD)
+        # --- Single compact HUD (one overlay call only) ---
+        lines = [
+            f"ROM: {rom}   FPS: {fps_avg:4.1f}",
+            "[ / ] prev/next  |  1 t1  2 t2  3 compute  |  p live  q quit",
+        ]
+        if not need_t2:
+            lines.append("Note: 2 is ignored (single-pose ROM).")
+        if STATE["live_pose"]:
+            s = "LIVE POSE: ON" + (f"  |  {rom}: {live_ang:.1f} deg" if (live_ang is not None) else "")
+            lines.append(s)
+        viz.overlay_text(frame_disp, lines, org=(20, 40))
+
+        # Preview (no HUD)
         show_preview(rom, t1, t2)
 
         cv2.imshow(LIVE_WIN, frame_disp)
 
+        # Keys
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             print("[run] Quit."); break
+        elif key == ord('p'):
+            STATE["live_pose"] = not STATE["live_pose"]
+            print(f"[live-pose] {'ON' if STATE['live_pose'] else 'OFF'}")
         elif key in (ord('['), ord('{')):
             idx = (idx - 1) % len(rom_names); RESULT["rom"] = None; print(f"[rom] {rom_names[idx]}")
         elif key in (ord(']'), ord('}')):
