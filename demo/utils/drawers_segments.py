@@ -46,5 +46,5 @@ register_drawer("right_shoulder_extension", _drawer_right_upper_arm)
 register_drawer("right_shoulder_abduction", _drawer_right_upper_arm)
 
 # If you want, elbows can also highlight the forearm segment:
-register_drawer("left_elbow_flexion", _drawer_left_forearm)
-register_drawer("right_elbow_flexion", _drawer_right_forearm)
+#register_drawer("left_elbow_flexion", _drawer_left_forearm)
+#register_drawer("right_elbow_flexion", _drawer_right_forearm)

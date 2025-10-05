@@ -11,40 +11,41 @@ import cv2
 # Text overlays & layout
 # ------------------------
 
-def overlay_text(frame: np.ndarray,
-                 lines: list,
-                 org: Tuple[int, int] = (20, 40),
-                 scale: float = 0.8) -> np.ndarray:
-    """
-    Draws a simple left-aligned multi-line text block with light outline.
-    """
-    y = org[1]
-    for line in lines:
-        cv2.putText(frame, line, (org[0], y),
-                    cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(frame, line, (org[0], y),
-                    cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+def overlay_text(frame, lines, org=(16, 32), scale=0.7, box_alpha=0.5, pad=6):
+    # compute box size
+    w_max, h_tot = 0, 0
+    for ln in lines:
+        (w, h), _ = cv2.getTextSize(ln, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+        w_max = max(w_max, w)
+        h_tot += h + int(10 * scale)
+    x0, y0 = org
+    x1, y1 = x0 + w_max + 2*pad, y0 + h_tot + 2*pad
+
+    # semi-transparent box
+    box = frame.copy()
+    cv2.rectangle(box, (x0 - pad, y0 - int(20*scale) - pad), (x1, y1), (0, 0, 0), -1)
+    cv2.addWeighted(box, box_alpha, frame, 1 - box_alpha, 0, frame)
+
+    # text
+    y = y0
+    for ln in lines:
+        cv2.putText(frame, ln, (x0, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
         y += int(28 * scale)
     return frame
 
-
-def annotate_panel(frame_rgb: np.ndarray,
-                   rom_name: str,
-                   mode_used: str,
-                   when_label: str,
-                   angle_deg: Optional[float],
-                   rgb_pos_sec: Optional[float]) -> np.ndarray:
-    """
-    Standard header used by the coordinator. Keep this minimal so ROM-specific drawers can add extras.
-    """
-    lines = [when_label,
-             f"Mode: {mode_used}",
-             f"ROM: {rom_name}"]
-    if angle_deg is not None:
-        lines.append(f"Angle: {angle_deg:.2f} deg")
-    lines.append(f"RGB actual: {rgb_pos_sec:.3f}s" if rgb_pos_sec is not None else "RGB actual: n/a")
-    return overlay_text(frame_rgb, lines)
-
+def annotate_panel(frame_rgb,
+                   rom_name,
+                   mode_used,
+                   when_label,
+                   angle_deg,
+                   rgb_pos_sec,
+                   scale: float = 0.7):
+    # compact header
+    line1 = f"{when_label} • {rom_name}"
+    line2 = f"Mode: {mode_used}" + (f" • Angle: {angle_deg:.1f}°" if angle_deg is not None else "")
+    line3 = (f"RGB: {rgb_pos_sec:.3f}s" if rgb_pos_sec is not None else None)
+    lines = [line1, line2] + ([line3] if line3 else [])
+    return overlay_text(frame_rgb, lines, scale=scale)
 
 def stack_side_by_side(img_left: np.ndarray, img_right: np.ndarray) -> np.ndarray:
     """

@@ -149,6 +149,8 @@ def main():
     if f1 is None:
         raise SystemExit("Failed to grab frame near t1.")
     rgb_h, rgb_w = f1.shape[:2]
+    #print(rgb_h, rgb_w)
+    #sys.exit()
     
     # --- t1 Depth via index-ratio
     d1 = None; d1_idx = None
