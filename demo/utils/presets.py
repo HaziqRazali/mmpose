@@ -66,6 +66,8 @@ VECPAIR: Dict[str, VecPairList] = {
 # -------------------------------
 REQUIRES_T2: Dict[str, bool] = {
     "left_shoulder_flexion": True,
+    "left_shoulder_extension": True,
+    "left_shoulder_abduction": True,
     # Add more if you introduce right_shoulder_flexion, etc.
     # "right_shoulder_flexion": True,
     # You can also mark abduction/extension True if you always compare t1 vs t2:
