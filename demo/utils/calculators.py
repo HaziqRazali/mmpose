@@ -183,6 +183,7 @@ def compute(rom_name: str,
             d1: Optional[dict]=None, d2: Optional[dict]=None,
             rgb_size: Tuple[int, int]=(640, 480),
             median_k: int = 5) -> RomResult:
+    #print("11111")
     fn = _REGISTRY.get(rom_name, None)
     if fn is not None:
         return fn(k1, k2, d1, d2, rgb_size, median_k)

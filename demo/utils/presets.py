@@ -15,6 +15,9 @@ Conventions:
   (Matches your _avg_point() logic.)
 """
 
+# joint names to id mapping
+# https://github.com/open-mmlab/mmpose/blob/main/configs/_base_/datasets/coco_wholebody.py
+
 from typing import Dict, List, Optional, Tuple, Union
 
 # -------------------------------
@@ -36,6 +39,7 @@ DRAW_IF_NO_DRAWER = "if_no_drawer"  # draw only if no drawer registered (default
 # (list-of-vec-pairs so you can expand later if needed)
 # -------------------------------
 VECPAIR: Dict[str, VecPairList] = {
+
     # --- Elbows (upper arm vs forearm) ---
     "left_elbow_flexion":  [[[7, 5], [7, 9]]],
     "right_elbow_flexion": [[[8, 6], [8, 10]]],
@@ -53,6 +57,9 @@ VECPAIR: Dict[str, VecPairList] = {
     "right_shoulder_abduction": [[[6, 8], [6, 12]]],
     "left_shoulder_extension":  [[[5, 7], [5, 11]]],
     "right_shoulder_extension": [[[6, 8], [6, 12]]],
+
+    # --- Height measurement line (head → avg(feet)) ---
+    "fullbody_height": [[[0, (15, 16)], [0, (15, 16)]]],
 
     # NOTE:
     # - We intentionally omit a vec-pair for:
@@ -86,6 +93,7 @@ DRAW_POLICY: Dict[str, str] = {
     "left_shoulder_internal_rotation": DRAW_NEVER,
 
     # Example: force vecs even if a drawer exists
+    "fullbody_height": DRAW_ALWAYS,
     # "left_elbow_flexion": DRAW_ALWAYS,
 }
 

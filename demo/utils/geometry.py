@@ -66,8 +66,15 @@ def _median_depth_at(depth: np.ndarray, u: float, v: float, k: int = 5) -> float
     return float(np.median(vals))
 
 def _rgbkpt_to_depth_xy(u_rgb, v_rgb, rgb_w, rgb_h, depth_w, depth_h):
+
     """Map pixel from RGB space to depth space."""
-    su = depth_w / float(rgb_w); sv = depth_h / float(rgb_h)
+    # If RGB is 1280 x 720 and depth is 640 x 360, it just scales everything by 0.5 in both axes. Verifiable via --show-3d
+
+    su = depth_w / float(rgb_w); 
+    sv = depth_h / float(rgb_h)
+    #print(su, depth_w, rgb_w)
+    #print(sv, depth_h, rgb_h)
+    #sys.exit()
     return u_rgb * su, v_rgb * sv
 
 def _backproject(u, v, Z, fx, fy, ox, oy):

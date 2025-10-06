@@ -174,6 +174,8 @@ def keypoints3d_from_kxy(kpts_xy: np.ndarray,
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
     depth = depth_frame['depth']
 
+    #ys = [k[1] for k in kpts_xy]
+    #print("[DBG] Δv RGB-space? max(y)-min(y) =", max(ys)-min(ys))
     out: List[Optional[np.ndarray]] = []
     for j in range(kpts_xy.shape[0]):
         pt2 = kpts_xy[j][:2]
@@ -183,6 +185,10 @@ def keypoints3d_from_kxy(kpts_xy: np.ndarray,
         Z = _median_depth_at(depth, u_d, v_d, k=median_k)
         if not (np.isfinite(Z) and Z > 0):
             out.append(None); continue
+        
+        #print("[DBG] depth.shape (h,w) =", depth.shape)
+        #print("[DBG] header (w_d,h_d) =", w_d, h_d)
+        #print("[DBG] intrinsics fx,fy,ox,oy =", fx, fy, ox, oy)
         P = _backproject(u_d, v_d, Z, fx, fy, ox, oy)
         out.append(P)
     return out
