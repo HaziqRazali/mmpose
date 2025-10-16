@@ -23,6 +23,7 @@ def _avg_point(kpts_xy, spec):
 # ---------- 2D angles ----------
 def angle2d_from_vecpair(kpts_xy, vec_pair):
     """Angle in 2D between two vecs defined by keypoints."""
+    #print(vec_pair)
     (P0, P1), (Q0, Q1) = vec_pair
     p0 = _avg_point(kpts_xy, P0); p1 = _avg_point(kpts_xy, P1)
     q0 = _avg_point(kpts_xy, Q0); q1 = _avg_point(kpts_xy, Q1)

@@ -166,6 +166,10 @@ def main():
     if e1:
         raise SystemExit(f"t1 failed: {e1}")
 
+    #if args.rom_test == "right_elbow_flexion" and k1 is not None:
+    #    # right shoulder = joint 6, right elbow = joint 8
+    #    k1[6, 0] = k1[8, 0]
+
     # --- t2 (only if needed)
     f2 = None; rgb_pos2 = None; d2 = None; d2_idx = None; k2 = None
     if needs_second:
@@ -229,11 +233,29 @@ def main():
             "intrinsics_t2": ({k: float(d2[k]) for k in ('fx','fy','ox','oy')} if (needs_second and d2) else None),
         })
 
-    json_path = out_dir / f"{video_path.stem}_{rom}_t1{'t2' if needs_second else ''}.json"
+    # Sanitize timestamps for filenames (replace : and .)
+    def safe_time_label(s):
+        if s is None:
+            return "na"
+        return s.replace(":", "-").replace(".", "_")
+
+    # Build output filename with timestamps
+    t1_label = safe_time_label(args.t1)
+    t2_label = safe_time_label(args.t2) if needs_second else None
+
+    if needs_second:
+        json_name = f"{video_path.stem}_{rom}_t1-{t1_label}_t2-{t2_label}.json"
+    else:
+        json_name = f"{video_path.stem}_{rom}_t1-{t1_label}.json"
+
+    json_path = out_dir / json_name
+
+    # Save JSON report
     with open(json_path, "w") as f:
         json.dump(report, f, indent=2)
 
     # --- visualization panels
+    mode_used = "3D"
     f1_ov = annotate_panel(f1.copy(), rom, mode_used, "t1", ang1 if ang1 is not None else ang2, rgb_pos1)
     f2_ov = None
     if needs_second and f2 is not None:
@@ -295,9 +317,25 @@ def main():
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+    # --- Save composite panel (JPEG)
     if args.save_frames:
-        out_img = out_dir / f"{video_path.stem}_{rom}_{'t1t2' if needs_second else 't1'}_panel.jpg"
+        # Reuse the same safe timestamp helper
+        def safe_time_label(s):
+            if s is None:
+                return "na"
+            return s.replace(":", "-").replace(".", "_")
+
+        t1_label = safe_time_label(args.t1)
+        t2_label = safe_time_label(args.t2) if needs_second else None
+
+        if needs_second:
+            img_name = f"{video_path.stem}_{rom}_t1-{t1_label}_t2-{t2_label}.jpg"
+        else:
+            img_name = f"{video_path.stem}_{rom}_t1-{t1_label}.jpg"
+
+        out_img = out_dir / img_name
         cv2.imwrite(str(out_img), combined)
+        print(f"[INFO] Saved composite frame to: {out_img}")
 
     #print(json.dumps(report, indent=2))
 

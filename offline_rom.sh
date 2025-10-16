@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FOLDERNAME="$HOME/datasets/telept/data/ipad/20251001-hh"
+#FOLDERNAME="$HOME/datasets/telept/data/ipad/20251001-hh"
+FOLDERNAME="/media/haziq/Haziq/telept/20251001-hh"
 
 DET_CFG="demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py"
 DET_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
@@ -12,7 +13,7 @@ POSE_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_sim
 # Format: rgb_base,depth_base,rom,t1,t2,extra_flags
 # Put any per-job flags in the 6th field (space-separated, no commas).
 JOBS1=(
-  "rgb_1759295456074,depth_1759295456074,left_shoulder_flexion,00:00:02.000,00:00:33.000,--show-3d --pcd-voxel 0.005 --t2-offset 0.25"
+  "rgb_1759295456074,,left_shoulder_flexion,00:00:02.000,00:00:33.000"
   "rgb_1759295588273,,left_shoulder_flexion,00:00:02.000,00:00:21.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
   "rgb_1759295647580,,left_shoulder_flexion,00:00:05.000,00:00:30.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
 )
@@ -70,6 +71,7 @@ for job in "${JOBS[@]}"; do
     --t1 "$t1" --t2 "$t2" \
     --out-dir "${FOLDERNAME}/rom" \
     --save-frames --debug-boxes \
-    --show \
     $extra_flags
 done
+
+#    --show \
