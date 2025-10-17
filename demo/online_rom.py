@@ -6,7 +6,10 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
+from datetime import datetime
+from pathlib import Path
 
+import os
 import cv2
 import numpy as np
 
@@ -347,7 +350,18 @@ def main():
             else:
                 print("[t2] ignored: single-pose ROM.")
         elif key == ord('3'):
+            # Compute and overlay ROM result
             compute_and_overlay(rom, t1, t2, live_frame=frame_disp)
+
+            # --- Save result as PNG ---
+            # Create folder: ./output/<YYYYMMDD-HHMMSS>/<rom_test>_<timestamp>.png
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            out_dir = Path("output") / timestamp
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            out_path = out_dir / f"{rom}_{timestamp}.png"
+            cv2.imwrite(str(out_path), frame_disp)
+            print(f"✅ Saved ROM overlay to: {out_path}")
 
     cap.release()
     cv2.destroyAllWindows()

@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#FOLDERNAME="$HOME/datasets/telept/data/ipad/20251001-hh"
-FOLDERNAME="/media/haziq/Haziq/telept/20251001-hh"
+# Try primary location first, then fallback if not found
+if [ -d "$HOME/datasets/telept/data/ipad/20251001-hh" ]; then
+  FOLDERNAME="$HOME/datasets/telept/data/ipad/20251001-hh"
+elif [ -d "/media/haziq/Haziq/telept/20251001-hh" ]; then
+  FOLDERNAME="/media/haziq/Haziq/telept/20251001-hh"
+else
+  echo "❌ Error: Neither dataset folder found."
+  exit 1
+fi
 
 DET_CFG="demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py"
 DET_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
