@@ -61,6 +61,8 @@ VECPAIR: Dict[str, VecPairList] = {
     # --- Height measurement line (head → avg(feet)) ---
     "fullbody_height": [[[0, (15, 16)], [0, (15, 16)]]],
 
+    "skeleton": []
+
     # NOTE:
     # - We intentionally omit a vec-pair for:
     #     * left_shoulder_internal_rotation  -> special 3D calc + custom drawer
@@ -95,6 +97,8 @@ DRAW_POLICY: Dict[str, str] = {
     # Example: force vecs even if a drawer exists
     "fullbody_height": DRAW_ALWAYS,
     # "left_elbow_flexion": DRAW_ALWAYS,
+
+    "skeleton": DRAW_NEVER,
 }
 
 # -------------------------------

@@ -321,10 +321,11 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                     for sk_id, sk in enumerate(self.skeleton):
                         
                         # skip irrelevant limbs
-                        if sk[0] in show_kpt_subset and sk[1] in show_kpt_subset:
-                            pass
-                        else:
-                            continue
+                        if show_kpt_subset is not None:
+                            if sk[0] in show_kpt_subset and sk[1] in show_kpt_subset:
+                                pass
+                            else:
+                                continue
 
                         #if 13 in sk and 15 in sk:
                         #    pass
@@ -367,8 +368,9 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                         continue
 
                     #print(kid, kid not in right_body_kpt_ids)
-                    if kid not in show_kpt_subset:
-                        continue
+                    if show_kpt_subset is not None:
+                        if kid not in show_kpt_subset:
+                            continue
                     #print("kid", kid)
 
                     color = kpt_color[kid]

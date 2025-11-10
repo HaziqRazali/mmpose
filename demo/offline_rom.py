@@ -158,6 +158,8 @@ def main():
         ratio1 = (rgb_pos1 or t1) / max(dur_sec, 1.0)
         d1_idx = int(round(np.clip(ratio1, 0.0, 1.0) * (dz.count - 1)))
         d1 = dz.get_frame(d1_idx)
+        #print(d1["h"], d1["w"])
+        #sys.exit()
 
     # --- t1 det+pose
     k1, bbox1, e1, all_b1, sc1, idx1 = run_once(
@@ -354,16 +356,36 @@ def main():
         pcd_t1 = None
         kpts3d_t1 = None
         try:
+
+            # build point cloud at t1
             pcd_t1 = build_point_cloud(
                 d1, f1, (rgb_w, rgb_h),
                 max_depth=args.pcd_max_depth,
                 voxel_size=(args.pcd_voxel if args.pcd_voxel and args.pcd_voxel > 0 else None),
                 tint=None,
-                transform=None
+                transform=None,
+                flip_yz=False,
             ) if d1 is not None else None
 
             # 3D keypoints for vec/overlays at t1 (uses same depth sampling rules as geometry.py)
             kpts3d_t1 = keypoints3d_from_kxy(k1, d1, (rgb_w, rgb_h), median_k=args.median_k) if d1 is not None else None
+
+            # apply the flip to both the point cloud and the skeleton
+            if d1 is not None:
+                R = np.array([
+                    [-1.0,  0.0,  0.0],
+                    [ 0.0, -1.0,  0.0],
+                    [ 0.0,  0.0,  1.0],
+                ], dtype=float)
+                kpts3d_t1 = [R @ p if p is not None else None for p in kpts3d_t1]
+
+                rot_z_180 = np.array([
+                    [-1,  0,  0, 0],   # flip X
+                    [ 0, -1,  0, 0],   # flip Y
+                    [ 0,  0,  1, 0],   # keep Z
+                    [ 0,  0,  0, 1],
+                ], dtype=float)
+                pcd_t1.transform(rot_z_180)
 
         except ImportError as e:
             raise SystemExit(f"Open3D not available for 3D viz (--show-3d). Error: {e}")
@@ -399,15 +421,43 @@ def main():
             T = make_offset_transform(dx=args.t2_offset, dy=0.0, dz=0.0)
 
             try:
+
+                # build point cloud at t2
                 pcd_t2 = build_point_cloud(
                     d2, f2, (rgb_w, rgb_h),
                     max_depth=args.pcd_max_depth,
                     voxel_size=(args.pcd_voxel if args.pcd_voxel and args.pcd_voxel > 0 else None),
                     tint=(0.9, 0.9, 0.9),  # subtle tint so t2 is distinguishable
-                    transform=T
-                )
+                    transform=None,
+                    flip_yz=False,
+                ) if d2 is not None else None
 
-                kpts3d_t2 = keypoints3d_from_kxy(k2, d2, (rgb_w, rgb_h), median_k=args.median_k)
+                # 3D keypoints for vec/overlays at t2 (uses same depth sampling rules as geometry.py)
+                kpts3d_t2 = keypoints3d_from_kxy(k2, d2, (rgb_w, rgb_h), median_k=args.median_k) if d2 is not None else None
+
+                # apply the flip to both the point cloud and the skeleton
+                if d2 is not None:
+                    R = np.array([
+                        [-1.0,  0.0,  0.0],
+                        [ 0.0, -1.0,  0.0],
+                        [ 0.0,  0.0,  1.0],
+                    ], dtype=float)
+                    kpts3d_t2 = [R @ p if p is not None else None for p in kpts3d_t2]
+
+                    rot_z_180 = np.array([
+                        [-1,  0,  0, 0],   # flip X
+                        [ 0, -1,  0, 0],   # flip Y
+                        [ 0,  0,  1, 0],   # keep Z
+                        [ 0,  0,  0, 1],
+                    ], dtype=float)
+                    pcd_t2.transform(rot_z_180)
+
+                    if T is not None:
+                        print(T)
+                        kpts3d_t2 = [(T[:3,:3] @ p + T[:3,3]) if p is not None else None for p in kpts3d_t2]
+                        print("x1", kpts3d_t1[5])
+                        print("x2", kpts3d_t2[5])
+                        pcd_t2.transform(T)
 
             except ImportError as e:
                 raise SystemExit(f"Open3D not available for 3D viz (--show-3d). Error: {e}")

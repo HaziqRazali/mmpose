@@ -20,9 +20,12 @@ POSE_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_sim
 # Format: rgb_base,depth_base,rom,t1,t2,extra_flags
 # Put any per-job flags in the 6th field (space-separated, no commas).
 JOBS1=(
-  "rgb_1759295456074,,left_shoulder_flexion,00:00:02.000,00:00:33.000"
-  "rgb_1759295588273,,left_shoulder_flexion,00:00:02.000,00:00:21.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
-  "rgb_1759295647580,,left_shoulder_flexion,00:00:05.000,00:00:30.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
+  #"rgb_1759295456074,depth_1759295456074,skeleton,00:00:02.000,00:00:33.000,--show-3d --pcd-voxel 0.005"
+  #"rgb_1759295456074,depth_1759295456074,left_shoulder_flexion,00:00:02.000,00:00:33.000,--show-3d --pcd-voxel 0.005"
+  "rgb_1759295456074,depth_1759295456074,left_shoulder_flexion,00:00:02.000,00:00:02.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 10000"
+  "rgb_1759295456074,depth_1759295456074,left_shoulder_flexion,00:00:02.000,00:00:33.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 10000"
+  "rgb_1759295588273,depth_1759295456074,left_shoulder_flexion,00:00:02.000,00:00:21.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 10"
+  "rgb_1759295647580,depth_1759295456074,left_shoulder_flexion,00:00:05.000,00:00:30.000,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
 )
 
 JOBS2=(

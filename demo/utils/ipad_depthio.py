@@ -127,11 +127,11 @@ class DepthZip:
         ts_norm = ts_abs - self.base_ts
 
         # intrinsics from header
-        fx = float(hmap['fx']); fy = float(hmap['fy'])
-        ox = float(hmap['ox']); oy = float(hmap['oy'])
+        fx = float(hmap['fx']);     fy = float(hmap['fy'])
+        ox = float(hmap['oy'])/2;   oy = float(hmap['ox'])/2 # swapped following Chuanchu's code
 
         # auto-fix intrinsics if they don't fit (w,h)
-        fx, fy, ox, oy, meta = _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy)
+        #fx, fy, ox, oy, meta = _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy)
 
         return_data = {
             'depth': depth,
@@ -143,6 +143,7 @@ class DepthZip:
         }
         #print(return_data['fx'], return_data['fy'])
         #print(return_data['ox'], return_data['oy'])
+        #print(return_data['h'], return_data['w'])
         #sys.exit()
         return return_data
 

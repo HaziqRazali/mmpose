@@ -3,6 +3,7 @@
 # Also provides helpers to compute 3D keypoints from 2D kpts using the same depth.
 
 from typing import Optional, Tuple, List, Dict
+import cv2
 import numpy as np
 
 try:
@@ -24,7 +25,64 @@ def _require_o3d():
         )
 
 
-def _depth_to_xyz_all(depth: np.ndarray,
+def _depth_to_xyz_all(depth_array: np.ndarray, rgb_frame_bgr: np.ndarray,
+                      fx: float, fy: float, ox: float, oy: float, dh: float, dw: float,
+                      max_depth: Optional[float] = None) -> np.ndarray:
+    
+    # Constants: calibration and scale factors
+    BASELINE    = 27.0
+    DISP_SCALE  = 1.5
+
+    # Convert disparity map to pseudo-depth
+    # Z = fx * baseline / disparity
+    depth_array = depth_array * DISP_SCALE
+    depth_map = np.clip(depth_array, 1e-6, None)
+    depth_map = float(fx) * BASELINE / depth_map
+    z = depth_map.astype(np.float32)
+
+    # Generate per-pixel coordinate grid (depth image space)
+    x, y = np.meshgrid(np.arange(dw), np.arange(dh))
+    x = x.astype(np.float32)
+    y = y.astype(np.float32)
+
+    # SANITY CHECK  #
+    # ============= #
+    print("_depth_to_xyz_all")
+    u = int(round(200.60452270507812))  # x coordinate (width)
+    v = int(round(316.62603759765625))  # y coordinate (height)
+    if 0 <= v < z.shape[0] and 0 <= u < z.shape[1]:
+        Z = depth_map[v, u]
+        X = (u - ox) * Z / fx
+        Y = (v - oy) * Z / fy
+        Z = Z / 4
+        print(fx, fy, ox, oy)
+        print(u, v)
+        print(np.array([X, Y, Z]))
+    print()
+    # ============= #
+
+    # Mask out invalid or extreme depth values
+    z_far   = 50000
+    z_near  = 0
+    valid_mask = ~np.isnan(z)  & (z < z_far) & (z > z_near)
+    x = x[valid_mask]
+    y = y[valid_mask]
+    z = z[valid_mask]
+
+    # Backproject valid pixels (u,v,Z) → 3D camera coordinates (X,Y,Z)
+    x3d = (x - ox) * z / fx
+    y3d = (y - oy) * z / fy
+    z = z/4
+    points = np.stack((x3d, y3d, z), axis=-1)  ## .reshape(-1, 3)
+
+    # Sample RGB color for each valid 3D point
+    # Depth map is half-res → RGB is full-res, so use *2 to align
+    rgb_frame_rgb = cv2.cvtColor(rgb_frame_bgr, cv2.COLOR_BGR2RGB)
+    colors = rgb_frame_rgb[y.astype(np.int32) * 2, x.astype(np.int32) * 2] / 255.0
+
+    return points, colors
+
+def _depth_to_xyz_all_old(depth: np.ndarray,
                       fx: float, fy: float, ox: float, oy: float,
                       max_depth: Optional[float] = None) -> np.ndarray:
     """
@@ -51,7 +109,6 @@ def _depth_to_xyz_all(depth: np.ndarray,
 
     XYZ = np.stack([X, Y, Zv], axis=1)                   # [N,3]
     return XYZ
-
 
 def _rgb_for_depth_pixels(rgb_bgr: np.ndarray,
                           depth_w: int, depth_h: int) -> np.ndarray:
@@ -82,14 +139,14 @@ def _rgb_for_depth_pixels(rgb_bgr: np.ndarray,
     rgb_samp_rgb = rgb_samp_bgr[..., ::-1].astype(np.float32) / 255.0   # [h,w,3]
     return rgb_samp_rgb
 
-
 def build_point_cloud(depth_frame: dict,
                       rgb_frame_bgr: Optional[np.ndarray],
                       rgb_size: Tuple[int, int],
                       max_depth: Optional[float] = None,
                       voxel_size: Optional[float] = None,
                       tint: Optional[Tuple[float, float, float]] = None,
-                      transform: Optional[np.ndarray] = None):
+                      transform: Optional[np.ndarray] = None,
+                      flip_yz: bool = False):
     """
     Create an Open3D point cloud from the given depth frame and aligned RGB.
     - depth_frame: dict {depth[h,w], fx,fy,ox,oy, h,w, ...}
@@ -103,50 +160,32 @@ def build_point_cloud(depth_frame: dict,
     """
     _require_o3d()
 
-    depth = depth_frame['depth']
+    depth_array = depth_frame['depth']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
     dh, dw = depth_frame['h'], depth_frame['w']
 
     # XYZ for all valid pixels
-    XYZ = _depth_to_xyz_all(depth, fx, fy, ox, oy, max_depth=max_depth)  # [N,3]
+    XYZ, colors = _depth_to_xyz_all(depth_array, rgb_frame_bgr, fx, fy, ox, oy, dh, dw, max_depth=max_depth)  # [N,3]
 
     if XYZ.shape[0] == 0:
         # empty cloud
         pcd = o3d.geometry.PointCloud()
         return pcd
 
-    # Colors for all pixels: build a per-pixel color image, then mask valid indices
-    if rgb_frame_bgr is not None:
-        colors_full = _rgb_for_depth_pixels(rgb_frame_bgr, dw, dh).reshape(-1, 3)  # [h*w, 3]
-    else:
-        # fallback grayscale based on Z
-        d = depth.copy()
-        mask = ~np.isfinite(d)
-        v = d[~mask]
-        if v.size == 0:
-            gray = np.zeros((dh * dw, 3), dtype=np.float32)
-        else:
-            mn = np.nanpercentile(v, 2.0)
-            mx = np.nanpercentile(v, 98.0)
-            if not np.isfinite(mn) or not np.isfinite(mx) or mx <= mn:
-                mn, mx = np.nanmin(v), np.nanmax(v)
-            d[mask] = mn
-            g = np.clip((d - mn) / max(mx - mn, 1e-6), 0, 1).astype(np.float32)
-            gray = np.stack([g, g, g], axis=2).reshape(-1, 3)  # [h*w,3]
-        colors_full = gray
-
-    # Mask with valid depth (same as XYZ mask); re-derive to match XYZ count
-    valid = np.isfinite(depth) & (depth > 0)
-    colors = colors_full[valid.reshape(-1), :]  # [N,3]
-
-    # Optional tint (e.g., dim/tint t2 cloud)
-    if tint is not None:
-        colors = np.clip(colors * np.array(tint, dtype=np.float32)[None, :], 0.0, 1.0)
-
     # Build point cloud
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(XYZ.astype(np.float64))
     pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
+
+    # if flip_yz:
+    #     #import numpy as np
+    #     rot_z_180 = np.array([
+    #         [-1,  0,  0, 0],   # flip X
+    #         [ 0, -1,  0, 0],   # flip Y
+    #         [ 0,  0,  1, 0],   # keep Z
+    #         [ 0,  0,  0, 1],
+    #     ], dtype=float)
+    #     pcd.transform(rot_z_180)
 
     # Optional transform (e.g., offset t2 along +X)
     if transform is not None:
@@ -159,7 +198,6 @@ def build_point_cloud(depth_frame: dict,
 
     return pcd
 
-
 def keypoints3d_from_kxy(kpts_xy: np.ndarray,
                          depth_frame: dict,
                          rgb_size: Tuple[int, int],
@@ -169,30 +207,86 @@ def keypoints3d_from_kxy(kpts_xy: np.ndarray,
     as geometry.angle3d_* helpers (median patch depth + backproject).
     Returns list of length K with np.array([X,Y,Z], float32) or None.
     """
+
+    # Constants: calibration and scale factors
+    BASELINE    = 27.0
+    DISP_SCALE  = 1.5
+    
+    # Inputs and intrinsics
     rw, rh = rgb_size
     h_d, w_d = depth_frame['h'], depth_frame['w']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
-    depth = depth_frame['depth']
 
-    #ys = [k[1] for k in kpts_xy]
-    #print("[DBG] Δv RGB-space? max(y)-min(y) =", max(ys)-min(ys))
+    # Convert disparity map to pseudo-depth
+    # Z = fx * baseline / disparity
+    depth_array = depth_frame['depth']
+    depth_array = depth_array * DISP_SCALE
+    depth_map = np.clip(depth_array, 1e-6, None)
+    depth_map = float(fx) * BASELINE / depth_map
+
+    # For each keypoint: map RGB→depth coords, sample median Z, backproject
     out: List[Optional[np.ndarray]] = []
     for j in range(kpts_xy.shape[0]):
         pt2 = kpts_xy[j][:2]
         if not np.isfinite(pt2).all():
             out.append(None); continue
-        u_d, v_d = _rgbkpt_to_depth_xy(pt2[0], pt2[1], rw, rh, w_d, h_d)
-        Z = _median_depth_at(depth, u_d, v_d, k=median_k)
-        if not (np.isfinite(Z) and Z > 0):
-            out.append(None); continue
         
-        #print("[DBG] depth.shape (h,w) =", depth.shape)
-        #print("[DBG] header (w_d,h_d) =", w_d, h_d)
-        #print("[DBG] intrinsics fx,fy,ox,oy =", fx, fy, ox, oy)
-        P = _backproject(u_d, v_d, Z, fx, fy, ox, oy)
-        out.append(P)
+        # Map the RGB-space keypoint to depth-space pixel coords (u_d, v_d)
+        u_d, v_d = _rgbkpt_to_depth_xy(pt2[0], pt2[1], rw, rh, w_d, h_d)
+
+        # Robust median depth around (u_d, v_d) from the converted depth_map
+        Z = _median_depth_at(depth_map, u_d, v_d, k=median_k)
+        if not (np.isfinite(Z) and Z > 0 and Z < 50000.0):
+            out.append(None); continue
+
+        # Backproject (u_d, v_d, Z) → (X, Y, Z) in camera coordinates
+        X = (u_d - ox) * Z / fx
+        Y = (v_d - oy) * Z / fy
+        Z = Z / 4
+
+        if j == 5:
+            print("keypoints3d_from_kxy")
+            print(j)
+            print(fx, fy, ox, oy)
+            print(u_d, v_d)
+            print(np.array([X, Y, Z]))
+            print()
+        out.append(np.array([X, Y, Z], dtype=np.float32))
+
     return out
 
+# def keypoints3d_from_kxy(kpts_xy: np.ndarray,
+#                          depth_frame: dict,
+#                          rgb_size: Tuple[int, int],
+#                          median_k: int = 5) -> List[Optional[np.ndarray]]:
+#     """
+#     Convert 2D keypoints [K,3] to 3D camera points using the SAME sampling rules
+#     as geometry.angle3d_* helpers (median patch depth + backproject).
+#     Returns list of length K with np.array([X,Y,Z], float32) or None.
+#     """
+#     rw, rh = rgb_size
+#     h_d, w_d = depth_frame['h'], depth_frame['w']
+#     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
+#     depth = depth_frame['depth']
+
+#     #ys = [k[1] for k in kpts_xy]
+#     #print("[DBG] Δv RGB-space? max(y)-min(y) =", max(ys)-min(ys))
+#     out: List[Optional[np.ndarray]] = []
+#     for j in range(kpts_xy.shape[0]):
+#         pt2 = kpts_xy[j][:2]
+#         if not np.isfinite(pt2).all():
+#             out.append(None); continue
+#         u_d, v_d = _rgbkpt_to_depth_xy(pt2[0], pt2[1], rw, rh, w_d, h_d)
+#         Z = _median_depth_at(depth, u_d, v_d, k=median_k)
+#         if not (np.isfinite(Z) and Z > 0):
+#             out.append(None); continue
+        
+#         #print("[DBG] depth.shape (h,w) =", depth.shape)
+#         #print("[DBG] header (w_d,h_d) =", w_d, h_d)
+#         #print("[DBG] intrinsics fx,fy,ox,oy =", fx, fy, ox, oy)
+#         P = _backproject(u_d, v_d, Z, fx, fy, ox, oy)
+#         out.append(P)
+#     return out
 
 def make_offset_transform(dx: float = 0.25, dy: float = 0.0, dz: float = 0.0) -> np.ndarray:
     """
