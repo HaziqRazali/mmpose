@@ -25,19 +25,10 @@ def _require_o3d():
         )
 
 
-def _depth_to_xyz_all(depth_array: np.ndarray, rgb_frame_bgr: np.ndarray,
+def _depth_to_xyz_all(depth_map: np.ndarray, rgb_frame_bgr: np.ndarray,
                       fx: float, fy: float, ox: float, oy: float, dh: float, dw: float,
                       max_depth: Optional[float] = None) -> np.ndarray:
     
-    # Constants: calibration and scale factors
-    BASELINE    = 27.0
-    DISP_SCALE  = 1.5
-
-    # Convert disparity map to pseudo-depth
-    # Z = fx * baseline / disparity
-    depth_array = depth_array * DISP_SCALE
-    depth_map = np.clip(depth_array, 1e-6, None)
-    depth_map = float(fx) * BASELINE / depth_map
     z = depth_map.astype(np.float32)
 
     # Generate per-pixel coordinate grid (depth image space)
@@ -45,21 +36,19 @@ def _depth_to_xyz_all(depth_array: np.ndarray, rgb_frame_bgr: np.ndarray,
     x = x.astype(np.float32)
     y = y.astype(np.float32)
 
-    # SANITY CHECK  #
-    # ============= #
-    print("_depth_to_xyz_all")
-    u = int(round(200.60452270507812))  # x coordinate (width)
-    v = int(round(316.62603759765625))  # y coordinate (height)
-    if 0 <= v < z.shape[0] and 0 <= u < z.shape[1]:
-        Z = depth_map[v, u]
-        X = (u - ox) * Z / fx
-        Y = (v - oy) * Z / fy
-        Z = Z / 4
-        print(fx, fy, ox, oy)
-        print(u, v)
-        print(np.array([X, Y, Z]))
-    print()
-    # ============= #
+    if 0:
+        print("_depth_to_xyz_all")
+        u = int(round(200.60452270507812))  # x coordinate (width)
+        v = int(round(316.62603759765625))  # y coordinate (height)
+        if 0 <= v < z.shape[0] and 0 <= u < z.shape[1]:
+            Z = depth_map[v, u]
+            X = (u - ox) * Z / fx
+            Y = (v - oy) * Z / fy
+            Z = Z / 4
+            print(fx, fy, ox, oy)
+            print(u, v)
+            print(np.array([X, Y, Z]))
+        print()
 
     # Mask out invalid or extreme depth values
     z_far   = 50000
@@ -160,12 +149,12 @@ def build_point_cloud(depth_frame: dict,
     """
     _require_o3d()
 
-    depth_array = depth_frame['depth']
+    depth_map = depth_frame['depth']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
     dh, dw = depth_frame['h'], depth_frame['w']
 
     # XYZ for all valid pixels
-    XYZ, colors = _depth_to_xyz_all(depth_array, rgb_frame_bgr, fx, fy, ox, oy, dh, dw, max_depth=max_depth)  # [N,3]
+    XYZ, colors = _depth_to_xyz_all(depth_map, rgb_frame_bgr, fx, fy, ox, oy, dh, dw, max_depth=max_depth)  # [N,3]
 
     if XYZ.shape[0] == 0:
         # empty cloud
@@ -207,22 +196,13 @@ def keypoints3d_from_kxy(kpts_xy: np.ndarray,
     as geometry.angle3d_* helpers (median patch depth + backproject).
     Returns list of length K with np.array([X,Y,Z], float32) or None.
     """
-
-    # Constants: calibration and scale factors
-    BASELINE    = 27.0
-    DISP_SCALE  = 1.5
     
     # Inputs and intrinsics
     rw, rh = rgb_size
     h_d, w_d = depth_frame['h'], depth_frame['w']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
 
-    # Convert disparity map to pseudo-depth
-    # Z = fx * baseline / disparity
-    depth_array = depth_frame['depth']
-    depth_array = depth_array * DISP_SCALE
-    depth_map = np.clip(depth_array, 1e-6, None)
-    depth_map = float(fx) * BASELINE / depth_map
+    depth_map = depth_frame['depth']
 
     # For each keypoint: map RGB→depth coords, sample median Z, backproject
     out: List[Optional[np.ndarray]] = []
@@ -240,18 +220,13 @@ def keypoints3d_from_kxy(kpts_xy: np.ndarray,
             out.append(None); continue
 
         # Backproject (u_d, v_d, Z) → (X, Y, Z) in camera coordinates
-        X = (u_d - ox) * Z / fx
-        Y = (v_d - oy) * Z / fy
-        Z = Z / 4
+        P = _backproject(u_d, v_d, Z, fx, fy, ox, oy)
+        out.append(P)
 
-        if j == 5:
-            print("keypoints3d_from_kxy")
-            print(j)
-            print(fx, fy, ox, oy)
-            print(u_d, v_d)
-            print(np.array([X, Y, Z]))
-            print()
-        out.append(np.array([X, Y, Z], dtype=np.float32))
+    if 1:
+        print("keypoints3d_from_kxy")
+        print(out[5], out[7])
+        print()
 
     return out
 

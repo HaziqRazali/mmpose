@@ -453,12 +453,9 @@ def main():
                     pcd_t2.transform(rot_z_180)
 
                     if T is not None:
-                        print(T)
                         kpts3d_t2 = [(T[:3,:3] @ p + T[:3,3]) if p is not None else None for p in kpts3d_t2]
-                        print("x1", kpts3d_t1[5])
-                        print("x2", kpts3d_t2[5])
                         pcd_t2.transform(T)
-
+                        
             except ImportError as e:
                 raise SystemExit(f"Open3D not available for 3D viz (--show-3d). Error: {e}")
 
@@ -475,7 +472,7 @@ def main():
             draw_for_rom_3d(rom, ctx3d_t2)
 
             geoms.append(pcd_t2)
-            if ctx3d_t2.overlays:
+            if 0: #ctx3d_t2.overlays:
                 # also offset overlay primitives by T (apply in-place transform when possible)
                 # LineSets have points we can transform manually:
                 import numpy as _np
@@ -486,7 +483,7 @@ def main():
                         P_t = (T @ P_h.T).T[:, :3]
                         # write back transformed points to this overlay
                         g.points = type(g.points)(P_t)
-                geoms.extend(ctx3d_t2.overlays)
+            geoms.extend(ctx3d_t2.overlays)
 
         # Finally: show everything in one window
         if geoms:
