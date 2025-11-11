@@ -103,34 +103,54 @@ def _project(P, fx, fy, ox, oy):
 
 # ---------- 3D angles ----------
 def angle3d_from_vecpair(kpts_xy_rgb, vec_pair, depth_frame, rgb_size, median_k=5):
-
+    """3D angle between vecs defined by keypoints, using depth backprojection."""
     if depth_frame is None:
         return None, False
 
-    """3D angle between vecs defined by keypoints, using depth backprojection."""
+    # --- unpack camera intrinsics and depth info ---
     h_d, w_d = depth_frame['h'], depth_frame['w']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
     depth = depth_frame['depth']
     rw, rh = rgb_size
 
+    # compute 3D point for a given keypoint spec --
     def pt3d(spec):
+        # spec may represent one or multiple joints; take average if needed
         pt2 = _avg_point(kpts_xy_rgb, spec)
-        if pt2 is None: return None
+        if pt2 is None: 
+            return None
+        
+        # convert RGB (x,y) to depth image coordinates
         u_d, v_d = _rgbkpt_to_depth_xy(pt2[0], pt2[1], rw, rh, w_d, h_d)
+
+        # sample depth value (median filter for robustness)
         Z = _median_depth_at(depth, u_d, v_d, k=median_k)
-        if not np.isfinite(Z) or Z <= 0: return None
+        if not np.isfinite(Z) or Z <= 0: 
+            return None
+        
+        # backproject (u,v,Z) to 3D camera-space coordinates
         return _backproject(u_d, v_d, Z, fx, fy, ox, oy)
 
-    (P0,P1),(Q0,Q1) = vec_pair
+    # --- unpack the two 2D vector definitions (each is a pair of joint specs) ---
+    (P0,P1), (Q0,Q1) = vec_pair
+
+    # --- compute 3D endpoints of each vector ---
     A,B,C,D = pt3d(P0), pt3d(P1), pt3d(Q0), pt3d(Q1)
     if any(p is None for p in (A,B,C,D)):
         return None, False
+    
+    # --- form 3D direction vectors ---
     v1, v2 = B-A, D-C
+
+    # --- normalize both vectors (unit length) ---
     n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
     if n1 < 1e-6 or n2 < 1e-6:
         return None, False
     v1 /= n1; v2 /= n2
+
+    # --- compute cosine of angle between the two vectors ---
     dot = float(np.clip(np.dot(v1,v2), -1.0,1.0))
+
     return math.degrees(math.acos(dot)), True
 
 def angle3d_between_segments_across_frames(k1, k2, d1, d2, rgb_size, median_k=5, j_sh=5, j_el=7):
