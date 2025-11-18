@@ -122,6 +122,8 @@ class DepthZip:
         # intrinsics from header
         fx = float(hmap['fx']);     fy = float(hmap['fy'])
         ox = float(hmap['oy'])/2;   oy = float(hmap['ox'])/2 # swapped following Chuanchu's code
+        #print(fx, fy, ox, oy)
+        #sys.exit()
         
         # read disparity mapt and convert to depth map
         depth_disparity = np.frombuffer(payload[:dl], dtype='<f4', count=w*h).reshape(h, w).astype(np.float32)

@@ -71,9 +71,8 @@ def _rgbkpt_to_depth_xy(u_rgb, v_rgb, rgb_w, rgb_h, depth_w, depth_h):
     """Map pixel from RGB space to depth space."""
     # If RGB is 1280 x 720 and depth is 640 x 360, it just scales everything by 0.5 in both axes. Verifiable via --show-3d
 
-    su = depth_w / float(rgb_w); 
-    sv = depth_h / float(rgb_h)
-
+    su = depth_w / float(rgb_w) # 360
+    sv = depth_h / float(rgb_h) # 720
     #print(su, depth_w, rgb_w)
     #print(sv, depth_h, rgb_h)
     #sys.exit()
