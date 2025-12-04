@@ -71,19 +71,24 @@ def _rgbkpt_to_depth_xy(u_rgb, v_rgb, rgb_w, rgb_h, depth_w, depth_h):
     """Map pixel from RGB space to depth space."""
     # If RGB is 1280 x 720 and depth is 640 x 360, it just scales everything by 0.5 in both axes. Verifiable via --show-3d
 
-    su = depth_w / float(rgb_w); 
-    sv = depth_h / float(rgb_h)
+    su = depth_w / float(rgb_w) # 360
+    sv = depth_h / float(rgb_h) # 720
     #print(su, depth_w, rgb_w)
     #print(sv, depth_h, rgb_h)
     #sys.exit()
     return u_rgb * su, v_rgb * sv
 
-def _backproject(u, v, Z, fx, fy, ox, oy):
+def _backproject(u, v, Z, fx, fy, ox, oy, Z_scale = 0.25):
     """Backproject depth pixel (u,v,Z) into 3D camera space."""
+    
+    # --- if invalid depth ---
     if not np.isfinite(Z) or Z <= 0:
         return None
+    
+    # --- backproject with optional scaling ---
     X = (u - ox) * Z / fx
     Y = (v - oy) * Z / fy
+    Z = Z * Z_scale
     return np.array([X, Y, Z], dtype=np.float32)
 
 def _project(P, fx, fy, ox, oy):
@@ -97,62 +102,112 @@ def _project(P, fx, fy, ox, oy):
 
 # ---------- 3D angles ----------
 def angle3d_from_vecpair(kpts_xy_rgb, vec_pair, depth_frame, rgb_size, median_k=5):
-
+    """3D angle between vecs defined by keypoints, using depth backprojection."""
     if depth_frame is None:
         return None, False
 
-    """3D angle between vecs defined by keypoints, using depth backprojection."""
+    # --- unpack camera intrinsics and depth info ---
     h_d, w_d = depth_frame['h'], depth_frame['w']
     fx, fy, ox, oy = depth_frame['fx'], depth_frame['fy'], depth_frame['ox'], depth_frame['oy']
     depth = depth_frame['depth']
     rw, rh = rgb_size
 
+    # compute 3D point for a given keypoint spec --
     def pt3d(spec):
+        # spec may represent one or multiple joints; take average if needed
         pt2 = _avg_point(kpts_xy_rgb, spec)
-        if pt2 is None: return None
+        if pt2 is None: 
+            return None
+        
+        # convert RGB (x,y) to depth image coordinates
         u_d, v_d = _rgbkpt_to_depth_xy(pt2[0], pt2[1], rw, rh, w_d, h_d)
+
+        # sample depth value (median filter for robustness)
         Z = _median_depth_at(depth, u_d, v_d, k=median_k)
-        if not np.isfinite(Z) or Z <= 0: return None
+        if not np.isfinite(Z) or Z <= 0: 
+            return None
+        
+        # backproject (u,v,Z) to 3D camera-space coordinates
         return _backproject(u_d, v_d, Z, fx, fy, ox, oy)
 
-    (P0,P1),(Q0,Q1) = vec_pair
+    # --- unpack the two 2D vector definitions (each is a pair of joint specs) ---
+    (P0,P1), (Q0,Q1) = vec_pair
+
+    # --- compute 3D endpoints of each vector ---
     A,B,C,D = pt3d(P0), pt3d(P1), pt3d(Q0), pt3d(Q1)
     if any(p is None for p in (A,B,C,D)):
         return None, False
+    
+    # --- form 3D direction vectors ---
     v1, v2 = B-A, D-C
+
+    # --- normalize both vectors (unit length) ---
     n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
     if n1 < 1e-6 or n2 < 1e-6:
         return None, False
     v1 /= n1; v2 /= n2
+
+    # --- compute cosine of angle between the two vectors ---
     dot = float(np.clip(np.dot(v1,v2), -1.0,1.0))
+
     return math.degrees(math.acos(dot)), True
 
 def angle3d_between_segments_across_frames(k1, k2, d1, d2, rgb_size, median_k=5, j_sh=5, j_el=7):
     """3D inter-frame angle for same segment (e.g. shoulder->elbow)."""
     if d1 is None or d2 is None:
         return None
+    
+    # --- unpack camera intrinsics and image dimensions for each frame ---
     h1,w1,fx1,fy1,ox1,oy1 = d1['h'],d1['w'],d1['fx'],d1['fy'],d1['ox'],d1['oy']
     h2,w2,fx2,fy2,ox2,oy2 = d2['h'],d2['w'],d2['fx'],d2['fy'],d2['ox'],d2['oy']
+
+    # --- extract depth maps from both frames ---
     depth1, depth2 = d1['depth'], d2['depth']
     rw, rh = rgb_size
 
+    # convert a 2D keypoint (in RGB coords) to a 3D point (camera coords) ---
     def pt3d(k, j, dw, dh, depth, fx, fy, ox, oy):
-        pt2 = k[j][:2]
-        if not np.isfinite(pt2).all(): return None
+        pt2 = k[j][:2] # get (x,y) of joint j in RGB image
+        if not np.isfinite(pt2).all(): 
+            return None
+        
+        # map RGB pixel coords to depth image coords (they may differ in size)
         u,v = _rgbkpt_to_depth_xy(pt2[0],pt2[1],rw,rh,dw,dh)
+
+        # sample median depth value around (u,v) for robustness
         Z = _median_depth_at(depth,u,v,k=median_k)
-        if not (np.isfinite(Z) and Z>0): return None
+        if not (np.isfinite(Z) and Z>0): 
+            return None
+        
+        # backproject pixel (u,v,Z) into 3D coordinates using camera intrinsics
         return _backproject(u,v,Z,fx,fy,ox,oy)
 
+    # --- get 3D joint coordinates for shoulder (SH) and elbow (EL) in each frame ---
     SH1, EL1 = pt3d(k1,j_sh,w1,h1,depth1,fx1,fy1,ox1,oy1), pt3d(k1,j_el,w1,h1,depth1,fx1,fy1,ox1,oy1)
     SH2, EL2 = pt3d(k2,j_sh,w2,h2,depth2,fx2,fy2,ox2,oy2), pt3d(k2,j_el,w2,h2,depth2,fx2,fy2,ox2,oy2)
+
+    if 1:
+        print("angle3d_between_segments_across_frames")
+        print(SH1, EL1)
+        print(SH2, EL2)
+        print()
+
+    # skip if any point failed (missing keypoint or invalid depth)
     if any(p is None for p in (SH1, EL1, SH2, EL2)): 
         return None
+    
+    # --- compute 3D segment vectors: shoulder→elbow for each frame ---
     v1, v2 = EL1-SH1, EL2-SH2
+
+    # --- normalize both vectors ---
     n1,n2 = np.linalg.norm(v1),np.linalg.norm(v2)
-    if n1<1e-6 or n2<1e-6: return None
+    if n1<1e-6 or n2<1e-6: 
+        return None
     v1/=n1; v2/=n2
+
+    # --- compute the cosine of the angle between the two normalized vectors ---
     dot=float(np.clip(np.dot(v1,v2),-1.0,1.0))
+
     return math.degrees(math.acos(dot))
 
 def angle3d_internal_rotation_left_simple(kpts_xy_rgb, depth_frame, rgb_size, median_k=5):

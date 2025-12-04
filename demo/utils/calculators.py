@@ -38,11 +38,17 @@ def resolve_vecpair(rom_name: str) -> Optional[List]:
     Returns a single vec_pair [[P0,P1],[Q0,Q1]] if available, else None.
     Prefers overrides, falls back to presets.
     """
-    if rom_name in VECPAIR_OVERRIDE:
-        return VECPAIR_OVERRIDE[rom_name]
-    vecs = get_vectors_for_preset(rom_name)
-    if not vecs:
+    # prefer overrides
+    vecs = VECPAIR_OVERRIDE.get(rom_name, None)
+    if vecs is None:
+        vecs = get_vectors_for_preset(rom_name)
+
+    # None => truly missing preset; [] => intentionally empty (no angles)
+    if vecs is None:
         raise ValueError(f"No vec-pair for ROM '{rom_name}' and no specialized calculator.")
+    if len(vecs) == 0:
+        return []  # intentional: draw-only ROM, skip angle computation
+
     vec_pair = vecs[0]
     if not (isinstance(vec_pair, (list, tuple)) and len(vec_pair) == 2):
         return None
@@ -58,6 +64,16 @@ def _per_frame_vecpair(rom_name: str,
                        rgb_size: Tuple[int, int],
                        median_k: int = 5) -> RomResult:
     vec_pair = resolve_vecpair(rom_name)
+
+    if vec_pair == []:
+        return RomResult(
+            mode_used="none",
+            ang1_deg=None,
+            ang2_deg=None,
+            delta_deg=None,
+            segment_rotation_t1_to_t2_deg=None,
+        )
+
     if vec_pair is None:
         raise ValueError(f"No vec-pair available for ROM '{rom_name}'")
 

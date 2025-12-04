@@ -8,11 +8,18 @@ from .viz3d import VizContext3D, register_drawer_3d, _make_lineset
 _YELLOW = (1.0, 1.0, 0.0)
 _GREEN  = (0.0, 0.78, 0.0)
 
+_SKELETON_EDGES = [
+    (5,7), (7,9), (6,8), (8,10),
+    (11,13), (13,15), (12,14), (14,16),
+    (5,6), (11,12), (5,11), (6,12),
+]
+
 def _add_segment(ctx: VizContext3D, j0: int, j1: int, color):
     if len(ctx.kpts3d) <= max(j0, j1):
         return
     P = ctx.kpts3d[j0]
     Q = ctx.kpts3d[j1]
+    
     if P is None or Q is None:
         return
     if not (np.isfinite(P).all() and np.isfinite(Q).all()):
@@ -21,6 +28,9 @@ def _add_segment(ctx: VizContext3D, j0: int, j1: int, color):
     ls = _make_lineset(pts, [(0, 1)], color)
     ctx.overlays.append(ls)
 
+def _drawer_full_skeleton_3d(ctx: VizContext3D):
+    for j0, j1 in _SKELETON_EDGES:
+        _add_segment(ctx, j0, j1, _YELLOW)
 
 # ---- drawers ----
 
@@ -40,6 +50,9 @@ def _drawer_right_forearm_3d(ctx: VizContext3D):
     # Elbow(8) -> Wrist(10)
     _add_segment(ctx, 8, 10, _GREEN)
 
+def _drawer_full_skeleton_3d(ctx: VizContext3D):
+    for j0, j1 in _SKELETON_EDGES:
+        _add_segment(ctx, j0, j1, _GREEN)
 
 # ---- registrations ----
 # Mirror the 2D registrations so behavior remains consistent.
@@ -56,3 +69,5 @@ register_drawer_3d("right_shoulder_abduction", _drawer_right_upper_arm_3d)
 # Elbow ROMs (forearm highlight)
 register_drawer_3d("left_elbow_flexion",  _drawer_left_forearm_3d)
 register_drawer_3d("right_elbow_flexion", _drawer_right_forearm_3d)
+
+register_drawer_3d("skeleton", _drawer_full_skeleton_3d)

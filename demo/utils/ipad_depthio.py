@@ -119,22 +119,31 @@ class DepthZip:
         if dl != w*h*4:  # fallback if header is inconsistent
             dl = w*h*4
 
-        depth = np.frombuffer(payload[:dl], dtype='<f4', count=w*h).reshape(h, w).astype(np.float32)
-        depth[~np.isfinite(depth)] = np.nan
-        depth[depth <= 0] = np.nan
+        # intrinsics from header
+        fx = float(hmap['fx']);     fy = float(hmap['fy'])
+        ox = float(hmap['oy'])/2;   oy = float(hmap['ox'])/2 # swapped following Chuanchu's code
+        #print(fx, fy, ox, oy)
+        #sys.exit()
+        
+        # read disparity mapt and convert to depth map
+        depth_disparity = np.frombuffer(payload[:dl], dtype='<f4', count=w*h).reshape(h, w).astype(np.float32)
+        depth_disparity[~np.isfinite(depth_disparity)] = np.nan
+        depth_disparity[depth_disparity <= 0] = np.nan
+        BASELINE    = 27.0
+        DISP_SCALE  = 1.5
+        depth_map = depth_disparity * DISP_SCALE
+        depth_map = np.clip(depth_map, 1e-6, None)
+        depth_map = float(fx) * BASELINE / depth_map
 
         ts_abs = float(hmap['timestamp'])
         ts_norm = ts_abs - self.base_ts
 
-        # intrinsics from header
-        fx = float(hmap['fx']); fy = float(hmap['fy'])
-        ox = float(hmap['ox']); oy = float(hmap['oy'])
-
         # auto-fix intrinsics if they don't fit (w,h)
-        fx, fy, ox, oy, meta = _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy)
+        #fx, fy, ox, oy, meta = _autoscale_intrinsics_to_frame(w, h, fx, fy, ox, oy)
 
         return_data = {
-            'depth': depth,
+            'depth_disparity': depth_disparity,
+            'depth': depth_map,
             'ts_sec_abs': ts_abs,
             'ts_sec_norm': ts_norm,
             'h': h, 'w': w,
@@ -143,6 +152,7 @@ class DepthZip:
         }
         #print(return_data['fx'], return_data['fy'])
         #print(return_data['ox'], return_data['oy'])
+        #print(return_data['h'], return_data['w'])
         #sys.exit()
         return return_data
 

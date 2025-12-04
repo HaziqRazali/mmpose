@@ -2,7 +2,17 @@
 set -euo pipefail
 
 #FOLDERNAME="$HOME/datasets/telept/data/ipad/20251001-hh"
-FOLDERNAME="/media/haziq/Haziq/telept/251006-hhcc"
+#FOLDERNAME="/media/haziq/Haziq/telept/251006-hhcc"
+
+# Try primary location first, then fallback if not found
+if [ -d "$HOME/datasets/telept/data/ipad/251006-hhcc" ]; then
+  FOLDERNAME="$HOME/datasets/telept/data/ipad/251006-hhcc"
+elif [ -d "/media/haziq/Haziq/telept/251006-hhcc" ]; then
+  FOLDERNAME="/media/haziq/Haziq/telept/251006-hhcc"
+else
+  echo "❌ Error: Neither dataset folder found."
+  exit 1
+fi
 
 DET_CFG="demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py"
 DET_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
@@ -13,12 +23,12 @@ POSE_CKP="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_sim
 # Format: rgb_base,depth_base,rom,t1,t2,extra_flags
 # Put any per-job flags in the 6th field (space-separated, no commas).
 JOBS1=(
-  "rgb_1759733264296,,right_elbow_flexion,00:00:10.833"
-  "rgb_1759733264296,,right_elbow_flexion,00:00:16.793"
-  "rgb_1759733264296,,right_elbow_flexion,00:00:26.229"
-  "rgb_1759733264296,,right_elbow_flexion,00:00:40.943"
-  "rgb_1759733264296,,right_elbow_flexion,00:01:04.374"
-  "rgb_1759733264296,,right_elbow_flexion,00:01:11.574"
+  "rgb_1759733264296,depth_1759733264296,right_elbow_flexion,00:00:10.833,,--show-3d --show-3d-both --pcd-voxel 0.005 --t2-offset 0.25"
+  "rgb_1759733264296,,right_elbow_flexion,00:00:16.793,"
+  "rgb_1759733264296,,right_elbow_flexion,00:00:26.229,"
+  "rgb_1759733264296,,right_elbow_flexion,00:00:40.943,"
+  "rgb_1759733264296,,right_elbow_flexion,00:01:04.374,"
+  "rgb_1759733264296,,right_elbow_flexion,00:01:11.574,"
 )
 
 JOBS2=(
@@ -57,7 +67,7 @@ for job in "${JOBS[@]}"; do
     --t1 "$t1" --t2 "$t2" \
     --out-dir "${FOLDERNAME}/rom" \
     --save-frames \
-    #--debug-boxes \
+    --debug-boxes \
     $extra_flags
 done
 
