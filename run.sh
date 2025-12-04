@@ -21,6 +21,14 @@ https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktai
 --input tests/data/coco/000000196141.jpg \
 --output-root vis_results/ --save-predictions
 
+python demo/topdown_demo_with_mmdet.py \
+demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
+configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
+--input /home/haziq/4D-Humans/example_data/videos/walking_new.mp4 \
+--output-root vis_results/ --save-predictions
+
 # webcam
 python demo/topdown_demo_with_mmdet.py \
 demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
