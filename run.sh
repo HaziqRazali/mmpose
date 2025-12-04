@@ -201,13 +201,13 @@ https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktai
 # for fit3d dataset #
 # # # # # # # # # # #
 
-for f in /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4; do
+for f in /media/haziq/Haziq/fit3d/data/temp/*/videos/*/*.mp4; do
   subject=$(echo "$f" | cut -d'/' -f8)                  # extract subject, e.g., s05
   recording_num=$(echo "$f" | cut -d'/' -f10)           # extract recording number, e.g., 50591643
   action=$(basename "$f")                               # e.g., band_pull_apart.mp4
   action_name="${action%.*}"                            # remove .mp4 extension
 
-  out_dir="/media/haziq/Haziq/fit3d/data/train/${subject}/mmpose/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122/${recording_num}"
+  out_dir="/media/haziq/Haziq/fit3d/data/temp/${subject}/mmpose/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122/${recording_num}"
 
   echo "Processing $subject / $recording_num / $action_name"
   

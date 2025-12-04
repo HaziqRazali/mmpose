@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
 import mimetypes
@@ -49,7 +48,7 @@ def process_one_image(args,
     pose_results = inference_topdown(pose_estimator, img, bboxes)
     data_samples = merge_data_samples(pose_results)
     end_time = time.time()
-    print(end_time - start_time)
+    #print(end_time - start_time)
 
     # show the results
     if isinstance(img, str):
