@@ -197,6 +197,10 @@ https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktai
 # /home/haziq/datasets/fit3d/data/train/*/videos/*/*.mp4
 # /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4
 
+# # # # # # # # # # #
+# for fit3d dataset #
+# # # # # # # # # # #
+
 for f in /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4; do
   subject=$(echo "$f" | cut -d'/' -f8)                  # extract subject, e.g., s05
   recording_num=$(echo "$f" | cut -d'/' -f10)           # extract recording number, e.g., 50591643
@@ -220,10 +224,18 @@ for f in /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4; do
     --save-predictions
 done
 
+# # # # # # # # # # # #
+# for custom dataset  #
+# # # # # # # # # # # #
 
-
-
-
+python demo/topdown_demo_with_mmdet.py \
+  demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
+  configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+  https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
+  --input /home/haziq/datasets/fit3d/data/others/wave.mp4 \
+  --output-root /home/haziq/datasets/fit3d/data/others/wave \
+  --save-predictions
 
 
 
