@@ -189,7 +189,7 @@ def main():
     parser.add_argument(
         '--det-interval',
         type=int,
-        default=3,
+        default=5,
         help='Run detector every N frames (1 = run on every frame)')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
