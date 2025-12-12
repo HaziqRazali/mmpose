@@ -78,7 +78,7 @@ def process_one_image(args,
             show_kpt_idx=args.show_kpt_idx,
             skeleton_style=args.skeleton_style,
             show=args.show,
-            wait_time=show_interval,
+            wait_time=show_interval if args.show else 0,
             kpt_thr=args.kpt_thr)
 
     return data_samples.get('pred_instances', None), last_bboxes
@@ -191,6 +191,11 @@ def main():
         type=int,
         default=5,
         help='Run detector every N frames (1 = run on every frame)')
+    parser.add_argument(
+        '--save-video',
+        action='store_true',
+        default=False,
+        help='Draw overlays and save an output video (headless-safe).')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
@@ -200,6 +205,8 @@ def main():
     assert args.input != ''
     assert args.det_config is not None
     assert args.det_checkpoint is not None
+    if args.save_video:
+        assert args.output_root != '', '--save-video requires --output-root'
 
     output_file = None
     if args.output_root:
@@ -229,13 +236,11 @@ def main():
 
     # build visualizer
     visualizer = None
-    if args.show:
+    if args.show or args.save_video:
         pose_estimator.cfg.visualizer.radius = args.radius
         pose_estimator.cfg.visualizer.alpha = args.alpha
         pose_estimator.cfg.visualizer.line_width = args.thickness
         visualizer = VISUALIZERS.build(pose_estimator.cfg.visualizer)
-        # the dataset_meta is loaded from the checkpoint and
-        # then pass to the model in init_pose_estimator
         visualizer.set_dataset_meta(
             pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
 
@@ -289,7 +294,7 @@ def main():
                         instances=split_instances(pred_instances)))
 
             # output videos (unchanged)
-            if output_file and visualizer is not None:
+            if output_file and args.save_video and visualizer is not None:
                 frame_vis = visualizer.get_image()
 
                 if video_writer is None:
@@ -310,7 +315,7 @@ def main():
             frame_end = time.time()
             elapsed = frame_end - t_start
             fps = frame_idx / elapsed
-            print(f"Total FPS (capture + inference): {fps:.2f}")
+            #print(f"Total FPS (capture + inference): {fps:.2f}")
 
         if video_writer:
             video_writer.release()

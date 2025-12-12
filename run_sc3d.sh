@@ -1,34 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# HumanEva MMPose batch runner (with TEST_MODE + SINGLE_VIDEO safety switches)
+# SC3D MMPose batch runner (with TEST_MODE + SINGLE_VIDEO safety switches)
 #
 # Input videos:
-#   /media/haziq/Haziq/mocap/data/humaneva/<train|val>/<subject>/videos/<camera>/<action>.avi
+#   /media/haziq/Haziq/mocap/data/sc3d/<train|val>/<subject>/videos/<camera>/<action>.mp4
 #
-# Output predictions (desired format):
-#   /media/haziq/Haziq/mocap/data/humaneva/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.json
+# Desired outputs:
+#   /media/haziq/Haziq/mocap/data/sc3d/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.json
+#   /media/haziq/Haziq/mocap/data/sc3d/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.mp4
 #
-# IMPORTANT:
-# - This script keeps --save-predictions.
-# - It does NOT skip existing outputs.
-# - Whether an output *video* is saved depends on your demo script + flags.
-#   This script DOES NOT add/assume any video-saving flags.
+# NOTE:
+# - Keeps --save-predictions.
+# - Does NOT skip existing outputs.
+# - Whether an output mp4 is produced depends on your demo script + flags.
+#
+# Usage:
+#   TEST_MODE=1 ./run_sc3d.sh
+#   SINGLE_VIDEO=1 ./run_sc3d.sh
+#   ./run_sc3d.sh | tee sc3d_log.txt
 
-# TEST_MODE=1 ./run_humaneva.sh
-# SINGLE_VIDEO=1 ./run_humaneva.sh
-# ./run_humaneva.sh | tee humaneva_log.txt
-
-DATA_ROOT="/media/haziq/Haziq/mocap/data/humaneva"
+DATA_ROOT="/media/haziq/Haziq/mocap/data/sc3d"
 MODEL_NAME="rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122"
 
-# Safety switches:
-#   TEST_MODE=1      -> print planned outputs only; do NOT mkdir; do NOT run python
-#   SINGLE_VIDEO=1   -> run only the first matched video then exit (ignored if TEST_MODE=1)
 TEST_MODE="${TEST_MODE:-0}"
 SINGLE_VIDEO="${SINGLE_VIDEO:-0}"
 
-# MMPose configs / checkpoints (same ones you used before)
 DET_CFG="demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py"
 DET_CKPT="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
 POSE_CFG="configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py"
@@ -36,17 +33,15 @@ POSE_CKPT="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_si
 
 shopt -s nullglob
 
-for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.avi; do
-  # Expected f format:
-  # /media/haziq/Haziq/mocap/data/humaneva/<split>/<subject>/videos/<camera>/<action>.avi
+for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.mp4; do
+  # Expected:
+  # .../sc3d/<split>/<subject>/videos/<camera>/<action>.mp4
 
-  action_file="$(basename "$f")"          # e.g., Box.avi
-  action_name="${action_file%.*}"         # e.g., Box
+  action_file="$(basename "$f")"      # e.g., 001.mp4
+  action_name="${action_file%.*}"     # e.g., 001
 
-  camera="$(basename "$(dirname "$f")")"  # e.g., C3
+  camera="$(basename "$(dirname "$f")")"  # e.g., 50591643
 
-  # Correct hierarchy:
-  # .../<split>/<subject>/videos/<camera>/<action>.avi
   # dirname 1 -> <camera>
   # dirname 2 -> videos
   # dirname 3 -> <subject>
@@ -56,8 +51,6 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.avi; do
 
   out_dir="${DATA_ROOT}/${split}/${subject}/mmpose/${MODEL_NAME}/${camera}"
   out_json="${out_dir}/${action_name}.json"
-
-  # This is just a "would be" path for a rendered video (ONLY if your demo script is configured to output one).
   out_mp4="${out_dir}/${action_name}.mp4"
 
   echo "Processing split=${split} subject=${subject} camera=${camera} action=${action_name}"
