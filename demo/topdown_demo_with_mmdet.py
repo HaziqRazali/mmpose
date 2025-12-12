@@ -25,38 +25,48 @@ try:
 except (ImportError, ModuleNotFoundError):
     has_mmdet = False
 
-
 def process_one_image(args,
                       img,
                       detector,
                       pose_estimator,
                       visualizer=None,
-                      show_interval=0):
-    """Visualize predicted keypoints (and heatmaps) of one image."""
+                      show_interval=0,
+                      last_bboxes=None,
+                      frame_idx=0):
+    """Run detector+pose (with optional skip-frame) and visualize."""
 
-    start_time = time.time()
-    # predict bbox
-    det_result = inference_detector(detector, img)
-    pred_instance = det_result.pred_instances.cpu().numpy()
-    bboxes = np.concatenate(
-        (pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
-    bboxes = bboxes[np.logical_and(pred_instance.labels == args.det_cat_id,
-                                   pred_instance.scores > args.bbox_thr)]
-    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
+    # decide whether to run detector on this frame
+    if (last_bboxes is None) or (frame_idx % args.det_interval == 0):
+        # predict bbox
+        det_result = inference_detector(detector, img)
+        pred_instance = det_result.pred_instances.cpu().numpy()
+        bboxes = np.concatenate(
+            (pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
+        bboxes = bboxes[
+            np.logical_and(
+                pred_instance.labels == args.det_cat_id,
+                pred_instance.scores > args.bbox_thr)]
+        bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
+        last_bboxes = bboxes
+    else:
+        # reuse cached boxes
+        bboxes = last_bboxes
+
+    # if no boxes at all, nothing to do
+    if bboxes is None or len(bboxes) == 0:
+        return None, last_bboxes
 
     # predict keypoints
     pose_results = inference_topdown(pose_estimator, img, bboxes)
     data_samples = merge_data_samples(pose_results)
-    end_time = time.time()
-    #print(end_time - start_time)
 
-    # show the results
-    if isinstance(img, str):
-        img = mmcv.imread(img, channel_order='rgb')
-    elif isinstance(img, np.ndarray):
-        img = mmcv.bgr2rgb(img)
-
+    # show the results (unchanged)
     if visualizer is not None:
+        if isinstance(img, str):
+            img = mmcv.imread(img, channel_order='rgb')
+        elif isinstance(img, np.ndarray):
+            img = mmcv.bgr2rgb(img)
+
         visualizer.add_datasample(
             'result',
             img,
@@ -71,9 +81,28 @@ def process_one_image(args,
             wait_time=show_interval,
             kpt_thr=args.kpt_thr)
 
-    # if there is no instance detected, return None
-    return data_samples.get('pred_instances', None)
+    return data_samples.get('pred_instances', None), last_bboxes
 
+def run_detector_once(args, img, detector):
+    """Run detector and return person bboxes (x1, y1, x2, y2)."""
+
+    det_result = inference_detector(detector, img)
+    pred_instance = det_result.pred_instances.cpu().numpy()
+
+    # [x1, y1, x2, y2, score]
+    bboxes = np.concatenate(
+        (pred_instance.bboxes, pred_instance.scores[:, None]), axis=1)
+
+    # keep only target class and above score threshold
+    keep = np.logical_and(
+        pred_instance.labels == args.det_cat_id,
+        pred_instance.scores > args.bbox_thr)
+    bboxes = bboxes[keep]
+
+    # NMS and drop score column
+    bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
+
+    return bboxes
 
 def main():
     """Visualize the demo images.
@@ -157,12 +186,17 @@ def main():
         '--alpha', type=float, default=0.8, help='The transparency of bboxes')
     parser.add_argument(
         '--draw-bbox', action='store_true', help='Draw bboxes of instances')
+    parser.add_argument(
+        '--det-interval',
+        type=int,
+        default=5,
+        help='Run detector every N frames (1 = run on every frame)')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
     args = parser.parse_args()
 
-    assert args.show or (args.output_root != '')
+    #assert args.show or (args.output_root != '')
     assert args.input != ''
     assert args.det_config is not None
     assert args.det_checkpoint is not None
@@ -194,14 +228,16 @@ def main():
             model=dict(test_cfg=dict(output_heatmaps=args.draw_heatmap))))
 
     # build visualizer
-    pose_estimator.cfg.visualizer.radius = args.radius
-    pose_estimator.cfg.visualizer.alpha = args.alpha
-    pose_estimator.cfg.visualizer.line_width = args.thickness
-    visualizer = VISUALIZERS.build(pose_estimator.cfg.visualizer)
-    # the dataset_meta is loaded from the checkpoint and
-    # then pass to the model in init_pose_estimator
-    visualizer.set_dataset_meta(
-        pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
+    visualizer = None
+    if args.show:
+        pose_estimator.cfg.visualizer.radius = args.radius
+        pose_estimator.cfg.visualizer.alpha = args.alpha
+        pose_estimator.cfg.visualizer.line_width = args.thickness
+        visualizer = VISUALIZERS.build(pose_estimator.cfg.visualizer)
+        # the dataset_meta is loaded from the checkpoint and
+        # then pass to the model in init_pose_estimator
+        visualizer.set_dataset_meta(
+            pose_estimator.dataset_meta, skeleton_style=args.skeleton_style)
 
     if args.input == 'webcam':
         input_type = 'webcam'
@@ -211,8 +247,7 @@ def main():
     if input_type == 'image':
 
         # inference
-        pred_instances = process_one_image(args, args.input, detector,
-                                           pose_estimator, visualizer)
+        pred_instances, _ = process_one_image(args, args.input, detector, pose_estimator, visualizer, show_interval=args.show_interval, last_bboxes=None, frame_idx=0)
 
         if args.save_predictions:
             pred_instances_list = split_instances(pred_instances)
@@ -225,63 +260,60 @@ def main():
 
         if args.input == 'webcam':
             cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  320)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
         else:
             cap = cv2.VideoCapture(args.input)
 
         video_writer = None
         pred_instances_list = []
         frame_idx = 0
+        last_bboxes = None
 
-        frame_idx = 0
+        t_start = time.time()
         while cap.isOpened():
             success, frame = cap.read()
-            frame_idx += 1
-
             if not success:
                 break
+            frame_idx += 1
 
-            # topdown pose estimation
-            pred_instances = process_one_image(args, frame, detector,
-                                               pose_estimator, visualizer,
-                                               0.001)
+            # topdown pose estimation with skip-frame inside the function
+            pred_instances, last_bboxes = process_one_image(
+                args, frame, detector, pose_estimator,
+                visualizer, 0.001, last_bboxes, frame_idx)
 
-            if args.save_predictions:
-                # save prediction results
+            if args.save_predictions and pred_instances is not None:
                 pred_instances_list.append(
                     dict(
                         frame_id=frame_idx,
                         instances=split_instances(pred_instances)))
 
-            # output videos
-            if output_file:
+            # output videos (unchanged)
+            if output_file and visualizer is not None:
                 frame_vis = visualizer.get_image()
 
                 if video_writer is None:
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    # the size of the image with visualization may vary
-                    # depending on the presence of heatmaps
                     video_writer = cv2.VideoWriter(
                         output_file,
                         fourcc,
-                        25,  # saved fps
+                        25,
                         (frame_vis.shape[1], frame_vis.shape[0]))
 
                 video_writer.write(mmcv.rgb2bgr(frame_vis))
 
             if args.show:
-                # press ESC to exit
                 if cv2.waitKey(5) & 0xFF == 27:
                     break
-
                 time.sleep(args.show_interval)
-        #end_time = time.time()
-        #total_time = end_time - start_time
-        #avg_fps = frame_idx / total_time
-        #print(f"Processed {frame_idx} frames in {total_time:.2f}s ({avg_fps:.2f} FPS)")
+
+            frame_end = time.time()
+            elapsed = frame_end - t_start
+            fps = frame_idx / elapsed
+            print(f"Total FPS (capture + inference): {fps:.2f}")
 
         if video_writer:
             video_writer.release()
-
         cap.release()
 
     else:

@@ -2,12 +2,15 @@
 	"folders": [
 		{
 			"path": "."
+<<<<<<< HEAD
 		},
 		{
 			"path": "../ROM_Annotator"
 		},
 		{
 			"path": "../../../media/haziq/Haziq/imar"
+=======
+>>>>>>> cb5f593b5f02d8d3bcfec3464a9cab958b8a3345
 		}
 	],
 	"settings": {}
