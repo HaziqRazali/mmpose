@@ -74,7 +74,9 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.avi; do
     --input "${f}" \
     --output-root "${out_dir}" \
     --save-predictions \
-    --save-video
+    --save-video \
+    --det-interval 1 \
+    --pick-center-person
 
   echo
 

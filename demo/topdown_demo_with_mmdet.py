@@ -52,6 +52,10 @@ def process_one_image(args,
         # reuse cached boxes
         bboxes = last_bboxes
 
+    if args.pick_center_person and bboxes is not None and len(bboxes) > 1:
+        bboxes = pick_center_person_bbox(img, bboxes)
+        last_bboxes = bboxes
+
     # if no boxes at all, nothing to do
     if bboxes is None or len(bboxes) == 0:
         return None, last_bboxes
@@ -103,6 +107,33 @@ def run_detector_once(args, img, detector):
     bboxes = bboxes[nms(bboxes, args.nms_thr), :4]
 
     return bboxes
+
+def pick_center_person_bbox(img, bboxes):
+    """Keep only the bbox whose center is closest to the image center.
+
+    Args:
+        img (str | np.ndarray): Image path or BGR image array.
+        bboxes (np.ndarray): shape (N, 4), each row [x1, y1, x2, y2].
+
+    Returns:
+        np.ndarray: shape (1, 4) bbox of the selected person.
+    """
+    if bboxes is None or len(bboxes) == 0:
+        return bboxes
+
+    if isinstance(img, str):
+        img_arr = mmcv.imread(img)
+    else:
+        img_arr = img
+
+    h, w = img_arr.shape[:2]
+    cx_img, cy_img = w * 0.5, h * 0.5
+
+    centers = (bboxes[:, :2] + bboxes[:, 2:4]) * 0.5
+    d2 = (centers[:, 0] - cx_img)**2 + (centers[:, 1] - cy_img)**2
+    idx = int(np.argmin(d2))
+
+    return bboxes[idx:idx + 1]
 
 def main():
     """Visualize the demo images.
@@ -192,6 +223,12 @@ def main():
         default=5,
         help='Run detector every N frames (1 = run on every frame)')
     parser.add_argument(
+        '--pick-center-person',
+        action='store_true',
+        default=False,
+        help='If set, keep only the detected person whose bbox center is closest '
+        'to the image center (requires --det-interval 1).')
+    parser.add_argument(
         '--save-video',
         action='store_true',
         default=False,
@@ -200,6 +237,9 @@ def main():
     assert has_mmdet, 'Please install mmdet to run the demo.'
 
     args = parser.parse_args()
+
+    if args.pick_center_person:
+        assert args.det_interval == 1,             '--pick-center-person requires --det-interval 1 (no bbox caching).'
 
     #assert args.show or (args.output_root != '')
     assert args.input != ''
