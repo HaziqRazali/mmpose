@@ -42,35 +42,6 @@ https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktai
 --save-predictions
 
 # # # # # # # # # # #
-# for chi3d dataset #
-# # # # # # # # # # #
-
-# /media/haziq/Haziq/imar/data/chi3d/test
-for f in /media/haziq/Haziq/imar/data/chi3d/train/*/videos/*/*.mp4; do
-  subject=$(echo "$f" | cut -d'/' -f9)      # s03
-  recording_num=$(echo "$f" | cut -d'/' -f11)  # 50591643
-  action=$(basename "$f")                   # Grab 1.mp4
-  action_name="${action%.*}"                # Grab 1
-
-  out_dir="/media/haziq/Haziq/imar/data/chi3d/train/${subject}/mmpose/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122/${recording_num}"
-
-  echo "Processing $subject / $recording_num / $action_name"
-  echo "  input:  $f"
-  echo "  outdir: $out_dir"
-
-  mkdir -p "$out_dir"
-
-  python demo/topdown_demo_with_mmdet.py \
-    demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
-    https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
-    configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
-    https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
-    --input "$f" \
-    --output-root "$out_dir" \
-    --save-predictions
-done
-
-# # # # # # # # # # #
 # for fit3d dataset #
 # # # # # # # # # # #
 
@@ -94,33 +65,10 @@ for f in /media/haziq/Haziq/fit3d/data/train/*/videos/*/*.mp4; do
     https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
     --input "$f" \
     --output-root "$out_dir" \
-    --save-predictions
-done
-
-# # # # # # # # # # # # # # #
-# for totalcapture dataset  #
-# # # # # # # # # # # # # # #
-
-for f in /media/haziq/Haziq/amass/data/totalcapture/videos/*/*.mp4; do
-  action=$(basename "$(dirname "$f")")              # e.g., acting1
-  video_file=$(basename "$f")                       # e.g., TC_S1_acting1_cam1.mp4
-  video_name="${video_file%.*}"                     # e.g., TC_S1_acting1_cam1
-
-  out_dir="/media/haziq/Haziq/amass/data/totalcapture/mmpose/${action}/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122"
-
-  echo "Processing $action / $video_name"
-
-  # Create output directory if it doesn't exist
-  mkdir -p "$out_dir"
-
-  python demo/topdown_demo_with_mmdet.py \
-    demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
-    https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
-    configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
-    https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
-    --input "$f" \
-    --output-root "$out_dir" \
-    --save-predictions
+    --save-predictions \
+    --save-video \
+    --det-interval 1 \
+    --pick-center-person
 done
 
 # # # # # # # # # # # #

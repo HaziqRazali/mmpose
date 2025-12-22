@@ -17,7 +17,7 @@ set -euo pipefail
 
 # TEST_MODE=1 ./run_humaneva.sh
 # SINGLE_VIDEO=1 ./run_humaneva.sh
-# ./run_humaneva.sh | tee humaneva_log.txt
+# ./run_humaneva.sh | tee log_humaneva.txt
 
 DATA_ROOT="/media/haziq/Haziq/mocap/data/humaneva"
 MODEL_NAME="rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122"
@@ -81,7 +81,9 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.avi; do
     --input "${f}" \
     --output-root "${out_dir}" \
     --save-predictions \
-    --save-video
+    --save-video \
+    --det-interval 1 \
+    --pick-center-person
 
   echo
 

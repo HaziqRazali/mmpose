@@ -18,7 +18,7 @@ set -euo pipefail
 # Usage:
 #   TEST_MODE=1 ./run_kit.sh
 #   SINGLE_VIDEO=1 ./run_kit.sh
-#   ./run_kit.sh | tee kit_log.txt
+#   ./run_kit.sh | tee log_kit.txt
 
 DATA_ROOT="/media/haziq/Haziq/mocap/data/kit"
 MODEL_NAME="rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122"
@@ -33,7 +33,7 @@ POSE_CKPT="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_si
 
 shopt -s nullglob
 
-for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.avi; do
+for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   # Expected:
   # .../kit/<split>/<subject>/videos/<camera>/<action>.avi
 
