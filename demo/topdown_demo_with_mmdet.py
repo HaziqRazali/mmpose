@@ -355,7 +355,7 @@ def main():
             frame_end = time.time()
             elapsed = frame_end - t_start
             fps = frame_idx / elapsed
-            print(f"Total FPS (capture + inference): {fps:.2f}")
+            #print(f"Total FPS (capture + inference): {fps:.2f}")
 
         if video_writer:
             video_writer.release()
