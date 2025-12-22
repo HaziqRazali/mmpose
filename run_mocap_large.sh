@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # KIT MMPose batch runner (with TEST_MODE + SINGLE_VIDEO safety switches)
+# https://github.com/open-mmlab/mmpose/tree/main/projects/rtmpose
 #
 # Input videos:
-#   /media/haziq/Haziq/mocap/data/kit/<train|val>/<subject>/videos/<camera>/<action>.mp4
+#   /media/haziq/Haziq/mocap/data/<dataset>/<train|val>/<subject>/videos/<camera>/<action>.mp4
 #
 # Desired outputs:
-#   /media/haziq/Haziq/mocap/data/kit/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.json
-#   /media/haziq/Haziq/mocap/data/kit/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.mp4
+#   /media/haziq/Haziq/mocap/data/<dataset>/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.json
+#   /media/haziq/Haziq/mocap/data/<dataset>/<train|val>/<subject>/mmpose/<model>/<camera>/<action>.mp4
 #
 # NOTE:
 # - Keeps --save-predictions.
@@ -16,11 +17,24 @@ set -euo pipefail
 # - Whether an output mp4 is produced depends on your demo script + flags.
 #
 # Usage:
-#   TEST_MODE=1 ./run_kit.sh
-#   SINGLE_VIDEO=1 ./run_kit.sh
-#   ./run_kit.sh | tee log_kit.txt
+#   TEST_MODE=1 ./run_mocap_large.sh kit
+#   SINGLE_VIDEO=1 ./run_mocap_large.sh kit
+#   ./run_mocap_large.sh kit | tee log_mocap_kit.txt
+#
+# If you don’t pass an arg, it defaults to "kit".
 
-DATA_ROOT="/media/haziq/Haziq/mocap/data/kit"
+# ---------------- ARG: dataset name ----------------
+DATASET_NAME="${1:-kit}"
+DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
+
+# Optional: sanity check so typos fail fast
+if [[ ! -d "${DATA_ROOT}" ]]; then
+  echo "[ERROR] DATA_ROOT does not exist: ${DATA_ROOT}"
+  echo "        You ran: $0 ${DATASET_NAME}"
+  exit 1
+fi
+
+# ---------------- settings ----------------
 MODEL_NAME="rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122"
 
 TEST_MODE="${TEST_MODE:-0}"
@@ -33,14 +47,15 @@ POSE_CKPT="https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_si
 
 shopt -s nullglob
 
+# ---------------- main loop ----------------
 for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   # Expected:
-  # .../kit/<split>/<subject>/videos/<camera>/<action>.avi
+  # .../<dataset>/<split>/<subject>/videos/<camera>/<action>.avi
 
   action_file="$(basename "$f")"      # e.g., 001.avi
   action_name="${action_file%.*}"     # e.g., 001
 
-  camera="$(basename "$(dirname "$f")")"  # e.g., 50591643
+  camera="$(basename "$(dirname "$f")")"  # e.g., cam1 or 50591643 etc
 
   # dirname 1 -> <camera>
   # dirname 2 -> videos
@@ -53,7 +68,7 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   out_json="${out_dir}/${action_name}.json"
   out_mp4="${out_dir}/${action_name}.mp4"
 
-  echo "Processing split=${split} subject=${subject} camera=${camera} action=${action_name}"
+  echo "Processing dataset=${DATASET_NAME} split=${split} subject=${subject} camera=${camera} action=${action_name}"
   echo "  input:     ${f}"
   echo "  out_json:  ${out_json}"
   echo "  out_video: ${out_mp4}  (only if your demo script actually writes a video)"
