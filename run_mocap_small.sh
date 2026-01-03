@@ -19,7 +19,10 @@ set -euo pipefail
 # Usage:
 #   TEST_MODE=1 ./run_mocap_small.sh kit
 #   SINGLE_VIDEO=1 ./run_mocap_small.sh kit
-#   ./run_mocap_small.sh kit | tee mocap_kit.txt
+#   ./run_mocap_small.sh fit3d | tee log_mocap_small_fit3d.txt
+#   ./run_mocap_small.sh sc3d | tee log_mocap_small_sc3d.txt
+#   ./run_mocap_small.sh humaneva | tee log_mocap_small_humaneva.txt
+#   ./run_mocap_small.sh kit | tee log_mocap_small_kit.txt
 #
 # If you don’t pass an arg, it defaults to "kit".
 
