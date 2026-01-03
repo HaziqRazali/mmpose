@@ -25,7 +25,8 @@ set -euo pipefail
 
 # ---------------- ARG: dataset name ----------------
 DATASET_NAME="${1:-kit}"
-DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
+DATA_ROOT="/home/haziqmr/datasets/mocap/data/${DATASET_NAME}"
+#DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
 
 # Optional sanity check (helps catch typos like "kti")
 if [[ ! -d "${DATA_ROOT}" ]]; then
