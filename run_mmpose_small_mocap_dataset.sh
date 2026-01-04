@@ -17,16 +17,16 @@ set -euo pipefail
 # - Whether an output mp4 is produced depends on your demo script + flags.
 #
 # Usage:
-#   TEST_MODE=1 ./run_mocap_small.sh kit
-#   SINGLE_VIDEO=1 ./run_mocap_small.sh kit
-#   ./run_mocap_small.sh kit | tee mocap_kit.txt
+#   TEST_MODE=1 ./run_mmpose_small_mocap_dataset.sh self
+#   SINGLE_VIDEO=1 ./run_mmpose_small_mocap_dataset.sh self
+#   ./run_mmpose_small_mocap_dataset.sh self | tee mocap_self.txt
 #
 # If you don’t pass an arg, it defaults to "kit".
 
 # ---------------- ARG: dataset name ----------------
 DATASET_NAME="${1:-kit}"
-DATA_ROOT="/home/haziqmr/datasets/mocap/data/${DATASET_NAME}"
-#DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
+#DATA_ROOT="/home/haziqmr/datasets/mocap/data/${DATASET_NAME}"
+DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
 
 # Optional sanity check (helps catch typos like "kti")
 if [[ ! -d "${DATA_ROOT}" ]]; then

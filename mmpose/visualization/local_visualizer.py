@@ -607,7 +607,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
     def add_datasample(self,
                        name: str,
                        color_image: np.ndarray,
-                       depth_image: np.ndarray,
+                       #depth_image: np.ndarray,
                        data_sample: PoseDataSample,
                        draw_gt: bool = True,
                        draw_pred: bool = True,
@@ -725,7 +725,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
         # It is convenient for users to obtain the drawn image.
         # For example, the user wants to obtain the drawn image and
         # save it as a video during video inference.
-        self.set_image(drawn_img, depth_image)
+        self.set_image(drawn_img)
 
         if show:
             self.show(drawn_img, win_name=name, wait_time=wait_time)
