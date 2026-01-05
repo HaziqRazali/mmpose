@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union, Literal
 
 import torch
 from mmcv.cnn import ConvModule
@@ -73,6 +73,8 @@ class RTMWHead(BaseHead):
         loss: ConfigType = dict(type='KLDiscretLoss', use_target_weight=True),
         decoder: OptConfigType = None,
         init_cfg: OptConfigType = None,
+        train_new_head: bool = False,
+        head_output_mode: Literal['old', 'new', 'both'] = 'old'
     ):
 
         if init_cfg is None:
@@ -81,7 +83,8 @@ class RTMWHead(BaseHead):
         super().__init__(init_cfg)
 
         self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.out_channels_whole_body    = 133
+        self.out_channels_new_head      = out_channels
         self.input_size = input_size
         self.in_featuremap_size = in_featuremap_size
         self.simcc_split_ratio = simcc_split_ratio
@@ -113,7 +116,7 @@ class RTMWHead(BaseHead):
 
         self.final_layer = ConvModule(
             in_channels,
-            out_channels,
+            self.out_channels_whole_body,
             kernel_size=final_layer_kernel_size,
             stride=1,
             padding=final_layer_kernel_size // 2,
@@ -121,7 +124,7 @@ class RTMWHead(BaseHead):
             act_cfg=dict(type='ReLU'))
         self.final_layer2 = ConvModule(
             in_channels // ps + in_channels // 4,
-            out_channels,
+            self.out_channels_whole_body,
             kernel_size=final_layer_kernel_size,
             stride=1,
             padding=final_layer_kernel_size // 2,
@@ -141,7 +144,7 @@ class RTMWHead(BaseHead):
         H = int(self.input_size[1] * self.simcc_split_ratio)
 
         self.gau = RTMCCBlock(
-            self.out_channels,
+            self.out_channels_whole_body,
             gau_cfg['hidden_dims'],
             gau_cfg['hidden_dims'],
             s=gau_cfg['s'],
@@ -155,6 +158,17 @@ class RTMWHead(BaseHead):
 
         self.cls_x = nn.Linear(gau_cfg['hidden_dims'], W, bias=False)
         self.cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
+
+        #################### new head
+        self.train_new_head = train_new_head
+        self.head_output_mode = head_output_mode
+        if self.train_new_head == True:
+            self.coco_mapper = nn.Sequential(
+                nn.Linear(self.out_channels_whole_body, self.out_channels_new_head),
+                nn.ReLU()
+            )
+            self.coco_cls_x = nn.Linear(gau_cfg['hidden_dims'], W, bias=False)
+            self.coco_cls_y = nn.Linear(gau_cfg['hidden_dims'], H, bias=False)
 
     def forward(self, feats: Tuple[Tensor]) -> Tuple[Tensor, Tensor]:
         """Forward the network.
@@ -171,28 +185,42 @@ class RTMWHead(BaseHead):
         """
         # enc_b  n / 2, h, w
         # enc_t  n,     h, w
-        enc_b, enc_t = feats
+        enc_b, enc_t = feats # [batch, 512, 16, 12] [batch, 1024, 8, 6]
 
-        feats_t = self.final_layer(enc_t)
-        feats_t = torch.flatten(feats_t, 2)
-        feats_t = self.mlp(feats_t)
+        feats_t = self.final_layer(enc_t)   # [num_samples, 133, 8, 6]
+        feats_t = torch.flatten(feats_t, 2) # [num_samples, 133, 48]
+        feats_t = self.mlp(feats_t)         # [num_samples, 133, 128]
 
-        dec_t = self.ps(enc_t)
-        dec_t = self.conv_dec(dec_t)
-        enc_b = torch.cat([dec_t, enc_b], dim=1)
+        dec_t = self.ps(enc_t)                      # [num_samples, 256, 16, 12]
+        dec_t = self.conv_dec(dec_t)                # [num_samples, 256, 16, 12]
+        enc_b = torch.cat([dec_t, enc_b], dim=1)    # [num_samples, 768, 16, 12]
 
-        feats_b = self.final_layer2(enc_b)
-        feats_b = torch.flatten(feats_b, 2)
-        feats_b = self.mlp2(feats_b)
+        feats_b = self.final_layer2(enc_b)          # [num_samples, 133, 16, 12]
+        feats_b = torch.flatten(feats_b, 2)         # [num_samples, 133, 192]
+        feats_b = self.mlp2(feats_b)                # [num_samples, 133, 128]
 
-        feats = torch.cat([feats_t, feats_b], dim=2)
+        feats = torch.cat([feats_t, feats_b], dim=2)    # [num_samples, 133, 256]
 
-        feats = self.gau(feats)
+        feats = self.gau(feats)     # [num_samples, 133, 256]
 
-        pred_x = self.cls_x(feats)
-        pred_y = self.cls_y(feats)
+        pred_x = self.cls_x(feats)  # [num_samples, num_keypoints, h*2 (384)]
+        pred_y = self.cls_y(feats)  # [num_samples, num_keypoints, w*2 (512)]
 
-        return pred_x, pred_y
+        #################### coco mapper
+
+        if self.head_output_mode == "new":
+            feats = feats.transpose(1,2)                # [num_samples, 256, 133]
+            coco_feats = self.coco_mapper(feats)        # [num_samples, 256, 17]
+            coco_feats = coco_feats.transpose(1,2)      # [num_samples, 17, 256]
+            coco_pred_x = self.coco_cls_x(coco_feats)   # [num_samples, 17, h*2 (384)]
+            coco_pred_y = self.coco_cls_y(coco_feats)   # [num_samples, 17, w*2 (512)]
+            return coco_pred_x, coco_pred_y
+        
+        elif self.head_output_mode == "old":
+            return pred_x, pred_y
+
+        elif self.head_output_mode == "both":
+            return pred_x, pred_y, coco_pred_x, coco_pred_y
 
     def predict(
         self,

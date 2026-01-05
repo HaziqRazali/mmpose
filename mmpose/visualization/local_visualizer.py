@@ -16,7 +16,6 @@ from mmpose.structures import PoseDataSample
 from .opencv_backend_visualizer import OpencvBackendVisualizer
 from .simcc_vis import SimCCVisualizer
 
-
 def _get_adaptive_scales(areas: np.ndarray,
                          min_area: int = 800,
                          max_area: int = 30000) -> np.ndarray:
@@ -113,7 +112,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                  text_color: Optional[Union[str,
                                             Tuple[int]]] = (255, 255, 255),
                  skeleton: Optional[Union[List, Tuple]] = None,
-                 line_width: Union[int, float] = 1,
+                 line_width: Union[int, float] = 2,
                  radius: Union[int, float] = 3,
                  show_keypoint_weight: bool = False,
                  backend: str = 'opencv',
@@ -239,11 +238,14 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
 
         return self.get_image()
 
+    # ttd
+    # - compute angle here
     def _draw_instances_kpts(self,
                              image: np.ndarray,
                              instances: InstanceData,
                              kpt_thr: float = 0.3,
                              show_kpt_idx: bool = False,
+                             show_kpt_subset: Optional[List[int]] = None,
                              skeleton_style: str = 'mmpose'):
         """Draw keypoints and skeletons (optional) of GT or prediction.
 
@@ -263,23 +265,31 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
         """
 
         if skeleton_style == 'openpose':
-            return self._draw_instances_kpts_openpose(image, instances,
-                                                      kpt_thr)
+            return self._draw_instances_kpts_openpose(image, instances, kpt_thr)
 
         self.set_image(image)
         img_h, img_w, _ = image.shape
 
         if 'keypoints' in instances:
-            keypoints = instances.get('transformed_keypoints',
-                                      instances.keypoints)
 
+            # 2D keypoints of all detected people, transformed back to the input image space
+            if hasattr(instances, 'transformed_keypoints'):
+                keypoints = instances.transformed_keypoints
+                #print("[DEBUG] Using transformed_keypoints")
+            else:
+                keypoints = instances.keypoints
+                #print("[DEBUG] transformed_keypoints not found, using keypoints instead")
+
+            # retrieve visibility [N, J] of each keypoint
             if 'keypoints_visible' in instances:
                 keypoints_visible = instances.keypoints_visible
             else:
                 keypoints_visible = np.ones(keypoints.shape[:-1])
 
+            # loop over each person
+            #print(f"num_detections: {len(keypoints)}")
             for kpts, visible in zip(keypoints, keypoints_visible):
-                kpts = np.array(kpts, copy=False)
+                kpts = np.array(kpts, copy=False) # [133, 2]
 
                 if self.kpt_color is None or isinstance(self.kpt_color, str):
                     kpt_color = [self.kpt_color] * len(kpts)
@@ -293,8 +303,11 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
 
                 # draw links
                 if self.skeleton is not None and self.link_color is not None:
-                    if self.link_color is None or isinstance(
-                            self.link_color, str):
+
+                    #print(self.skeleton)
+
+                    # get color
+                    if self.link_color is None or isinstance(self.link_color, str):
                         link_color = [self.link_color] * len(self.skeleton)
                     elif len(self.link_color) == len(self.skeleton):
                         link_color = self.link_color
@@ -304,9 +317,27 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                             f'({len(self.link_color)}) does not matches '
                             f'that of skeleton ({len(self.skeleton)})')
 
+                    # for each link in the skeleton
                     for sk_id, sk in enumerate(self.skeleton):
+                        
+                        # skip irrelevant limbs
+                        if show_kpt_subset is not None:
+                            if sk[0] in show_kpt_subset and sk[1] in show_kpt_subset:
+                                pass
+                            else:
+                                continue
+
+                        #if 13 in sk and 15 in sk:
+                        #    pass
+                        #else:
+                        #    continue
+                        
                         pos1 = (int(kpts[sk[0], 0]), int(kpts[sk[0], 1]))
                         pos2 = (int(kpts[sk[1], 0]), int(kpts[sk[1], 1]))
+
+                        #if 7 in sk and 9 in sk:
+                        #    dist = np.linalg.norm(np.array(pos1) - np.array(pos2))
+                        #    self.draw_texts(f"{dist:.2f}", pos1, 10, (0, 255, 0))
 
                         if (pos1[0] <= 0 or pos1[0] >= img_w or pos1[1] <= 0
                                 or pos1[1] >= img_h or pos2[0] <= 0
@@ -317,6 +348,8 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                             # skip the link that should not be drawn
                             continue
 
+                        #print(sk)
+
                         X = np.array((pos1[0], pos2[0]))
                         Y = np.array((pos1[1], pos2[1]))
                         color = link_color[sk_id]
@@ -324,19 +357,21 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                             color = tuple(int(c) for c in color)
                         transparency = self.alpha
                         if self.show_keypoint_weight:
-                            transparency *= max(
-                                0,
-                                min(1,
-                                    0.5 * (visible[sk[0]] + visible[sk[1]])))
+                            transparency *= max(0, min(1,0.5 * (visible[sk[0]] + visible[sk[1]])))
 
-                        self.draw_lines(
-                            X, Y, color, line_widths=self.line_width)
+                        self.draw_lines(X, Y, color, line_widths=self.line_width)
 
                 # draw each point on image
                 for kid, kpt in enumerate(kpts):
                     if visible[kid] < kpt_thr or kpt_color[kid] is None:
                         # skip the point that should not be drawn
                         continue
+
+                    #print(kid, kid not in right_body_kpt_ids)
+                    if show_kpt_subset is not None:
+                        if kid not in show_kpt_subset:
+                            continue
+                    #print("kid", kid)
 
                     color = kpt_color[kid]
                     if not isinstance(color, str):
@@ -360,6 +395,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                             font_sizes=self.radius * 3,
                             vertical_alignments='bottom',
                             horizontal_alignments='center')
+                #print()
 
         return self.get_image()
 
@@ -570,13 +606,15 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
     @master_only
     def add_datasample(self,
                        name: str,
-                       image: np.ndarray,
+                       color_image: np.ndarray,
+                       #depth_image: np.ndarray,
                        data_sample: PoseDataSample,
                        draw_gt: bool = True,
                        draw_pred: bool = True,
                        draw_heatmap: bool = False,
                        draw_bbox: bool = False,
                        show_kpt_idx: bool = False,
+                       show_kpt_subset: Optional[List[int]] = None,
                        skeleton_style: str = 'mmpose',
                        show: bool = False,
                        wait_time: float = 0,
@@ -645,36 +683,37 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
                                                  axis=0)
 
         if draw_pred:
-            pred_img_data = image.copy()
+            pred_img_data = color_image.copy()
             pred_img_heatmap = None
 
             # draw bboxes & keypoints
             if 'pred_instances' in data_sample:
-                pred_img_data = self._draw_instances_kpts(
-                    pred_img_data, data_sample.pred_instances, kpt_thr,
-                    show_kpt_idx, skeleton_style)
+                pred_img_data = self._draw_instances_kpts(pred_img_data, data_sample.pred_instances, kpt_thr, show_kpt_idx, show_kpt_subset, skeleton_style)
                 if draw_bbox:
-                    pred_img_data = self._draw_instances_bbox(
-                        pred_img_data, data_sample.pred_instances)
+                    pred_img_data = self._draw_instances_bbox(pred_img_data, data_sample.pred_instances)
 
             # draw heatmaps
             if 'pred_fields' in data_sample and draw_heatmap:
                 if 'keypoint_x_labels' in data_sample.pred_instances:
-                    pred_img_heatmap = self._draw_instance_xy_heatmap(
-                        data_sample.pred_fields, image)
+                    pred_img_heatmap = self._draw_instance_xy_heatmap(data_sample.pred_fields, color_image)
                 else:
-                    pred_img_heatmap = self._draw_instance_heatmap(
-                        data_sample.pred_fields, image)
+                    pred_img_heatmap = self._draw_instance_heatmap(data_sample.pred_fields, color_image)
                 if pred_img_heatmap is not None:
-                    pred_img_data = np.concatenate(
-                        (pred_img_data, pred_img_heatmap), axis=0)
+                    pred_img_data = np.concatenate((pred_img_data, pred_img_heatmap), axis=0)
+
+            # put depth map beside
+            #depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            #pred_img_data = np.hstack((pred_img_data, depth_colormap))
+
+        #if hasattr(data_sample.pred_instances, 'keypoints_3d'):
+        #    self._plot_3d_skeleton(data_sample.pred_instances.keypoints_3d[0])
 
         # merge visualization results
         if gt_img_data is not None and pred_img_data is not None:
             if gt_img_heatmap is None and pred_img_heatmap is not None:
-                gt_img_data = np.concatenate((gt_img_data, image), axis=0)
+                gt_img_data = np.concatenate((gt_img_data, color_image), axis=0)
             elif gt_img_heatmap is not None and pred_img_heatmap is None:
-                pred_img_data = np.concatenate((pred_img_data, image), axis=0)
+                pred_img_data = np.concatenate((pred_img_data, color_image), axis=0)
 
             drawn_img = np.concatenate((gt_img_data, pred_img_data), axis=1)
 
@@ -690,7 +729,7 @@ class PoseLocalVisualizer(OpencvBackendVisualizer):
 
         if show:
             self.show(drawn_img, win_name=name, wait_time=wait_time)
-
+           
         if out_file is not None:
             mmcv.imwrite(drawn_img[..., ::-1], out_file)
         else:

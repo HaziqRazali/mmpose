@@ -73,6 +73,7 @@ class GetBBoxCenterScale(BaseTransform):
             results['bbox_scale'] = results['bbox_scale'] * self.padding
 
         else:
+            #print("DEBUG results keys:", list(results.keys()))
             bbox = results['bbox']
             center, scale = bbox_xyxy2cs(bbox, padding=self.padding)
 

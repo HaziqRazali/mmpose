@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import os
+import torch
 import os.path as osp
 
 from mmengine.config import Config, DictAction
@@ -19,6 +20,9 @@ def parse_args():
         help='If specify checkpint path, resume from it, while if not '
         'specify, try to auto resume from the latest checkpoint '
         'in the work directory.')
+    parser.add_argument('--trainable_layers', nargs='+', default=None, help='List of trainable layers (e.g., --trainable_layers coco face)')
+    parser.add_argument('--resume_optimizer', type=int, choices=[0,1], default=1)
+    parser.add_argument('--resume_param_scheduler', type=int, choices=[0,1], default=1)
     parser.add_argument(
         '--amp',
         action='store_true',
@@ -113,6 +117,10 @@ def merge_args(cfg, args):
         cfg.resume = True
         cfg.load_from = args.resume
 
+    cfg.trainable_layers = args.trainable_layers
+    cfg.resume_optimizer = args.resume_optimizer
+    cfg.resume_param_scheduler = args.resume_param_scheduler
+
     # enable auto scale learning rate
     if args.auto_scale_lr:
         cfg.auto_scale_lr.enable = True
@@ -138,14 +146,17 @@ def merge_args(cfg, args):
 
 
 def main():
+    torch.multiprocessing.set_sharing_strategy('file_system')
     args = parse_args()
 
     # load config
     cfg = Config.fromfile(args.config)
+    # print(cfg["num_keypoints"]) # 133
+    # print(cfg["optim_wrapper"]) # {'type': 'OptimWrapper', 'optimizer': {'type': 'AdamW', 'lr': 0.004, 'weight_decay': 0.05}, 'clip_grad': {'max_norm': 35, 'norm_type': 2}, 'paramwise_cfg': {'norm_decay_mult': 0, 'bias_decay_mult': 0, 'bypass_duplicate': True}}
 
     # merge CLI arguments to config
     cfg = merge_args(cfg, args)
-
+    
     # set preprocess configs to model
     if 'preprocess_cfg' in cfg:
         cfg.model.setdefault('data_preprocessor',

@@ -182,10 +182,30 @@ def inference_topdown(model: nn.Module,
             data_info = dict(img_path=img)
         else:
             data_info = dict(img=img)
-        data_info['bbox'] = bbox[None]  # shape (1, 4)
+        data_info['bbox'] = bbox[None]  # [4] to [1, 4]
         data_info['bbox_score'] = np.ones(1, dtype=np.float32)  # shape (1,)
         data_info.update(model.dataset_meta)
         data_list.append(pipeline(data_info))
+
+    # for k,v in model.dataset_meta.items():
+    #     print(k)
+    # dataset_name
+    # num_keypoints
+    # keypoint_id2name
+    # keypoint_name2id
+    # upper_body_ids
+    # lower_body_ids
+    # flip_indices
+    # flip_pairs
+    # keypoint_colors
+    # num_skeleton_links
+    # skeleton_links
+    # skeleton_link_colors
+    # dataset_keypoint_weights
+    # sigmas
+
+    # print(data_list[0].keys())
+    # dict_keys(['inputs', 'data_samples'])
 
     if data_list:
         # collate data list into a batch, which is a dict with following keys:
@@ -196,6 +216,14 @@ def inference_topdown(model: nn.Module,
             results = model.test_step(batch)
     else:
         results = []
+
+    # for k,v in batch.items():
+    #     print(k)
+    # inputs
+    # data_samples
+    
+    # print(len(batch["inputs"]))       # 6
+    # print(batch["inputs"][0].shape)   # torch.Size([3, 256, 192])
 
     return results
 

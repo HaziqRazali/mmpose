@@ -8,6 +8,12 @@ import torch
 from mmengine.dist import master_only
 from mmengine.visualization import Visualizer
 
+# mouse over function
+mouse_x, mouse_y = -1, -1
+def mouse_callback(event, x, y, flags, param):
+    global mouse_x, mouse_y
+    if event == cv2.EVENT_MOUSEMOVE:
+        mouse_x, mouse_y = x, y
 
 class OpencvBackendVisualizer(Visualizer):
     """Base visualizer with opencv backend support.
@@ -39,9 +45,14 @@ class OpencvBackendVisualizer(Visualizer):
             f'\'backend\' must be either \'opencv\' or \'matplotlib\', ' \
             f'but got \'{backend}\'.'
         self.backend = backend
+        self.print = 1
+
+        # for depth visualization
+        self.mouse_x, self.mouse_y = -1, -1
+        self.depth_frame = None
 
     @master_only
-    def set_image(self, image: np.ndarray) -> None:
+    def set_image(self, image: np.ndarray, depth_image=None) -> None:
         """Set the image to draw.
 
         Args:
@@ -54,6 +65,16 @@ class OpencvBackendVisualizer(Visualizer):
         self.width, self.height = image.shape[1], image.shape[0]
         self._default_font_size = max(
             np.sqrt(self.height * self.width) // 90, 10)
+        
+        if depth_image is not None:
+            self.depth_frame = depth_image
+            self.depth_image_raw = np.asanyarray(depth_image.get_data())
+            # Generate a colored depth image for visualization
+            self.depth_colormap = cv2.applyColorMap(
+                cv2.convertScaleAbs(self.depth_image_raw, alpha=0.03),
+                cv2.COLORMAP_JET)
+        else:
+            self.depth_colormap = None
 
         if self.backend == 'matplotlib':
             # add a small 1e-2 to avoid precision lost due to matplotlib's
@@ -454,6 +475,7 @@ class OpencvBackendVisualizer(Visualizer):
                 continue_key=continue_key)
 
         elif self.backend == 'opencv':
+
             # Keep images are shown in the same window, and the title of window
             # will be updated with `win_name`.
             if not hasattr(self, win_name):
@@ -463,7 +485,33 @@ class OpencvBackendVisualizer(Visualizer):
             else:
                 cv2.setWindowTitle(f'{id(self)}', win_name)
             shown_img = self.get_image() if drawn_img is None else drawn_img
-            cv2.imshow(str(id(self)), mmcv.bgr2rgb(shown_img))
+            if self.print == 1:
+                print(f"shown_img shape: {shown_img.shape}")
+                self.print = 0
+
+            # If depth_colormap is available, concatenate
+            if self.depth_colormap is not None:
+                rgb_image = mmcv.bgr2rgb(shown_img)
+                stacked = np.hstack((rgb_image, self.depth_colormap))
+                cv2.imshow(str(id(self)), stacked)
+            else:
+                cv2.imshow(str(id(self)), mmcv.bgr2rgb(shown_img))
             cv2.waitKey(int(np.ceil(wait_time * 1000)))
+
+            # mouse over
+            cv2.setMouseCallback(str(id(self)), mouse_callback)
+            self.mouse_x, self.mouse_y = mouse_x, mouse_y
+            if self.depth_frame is not None and self.depth_colormap is not None:
+                height  = self._image.shape[0]
+                width   = self._image.shape[1]
+                full_width = width * 2  # Since we are stacking RGB + Depth side-by-side
+
+                if 0 <= self.mouse_x < full_width and 0 <= self.mouse_y < height:
+                    x_in_image = int(self.mouse_x % width)
+                    y_in_image = int(self.mouse_y)
+                    distance = self.depth_frame.get_distance(x_in_image, y_in_image)
+                    side = "RGB" if self.mouse_x < width else "DEPTH"
+                    print(f"[{side}] Mouse at ({self.mouse_x}, {self.mouse_y}) → Pixel ({x_in_image}, {y_in_image}) → Distance: {distance:.3f} meters", end='\r')
+
         else:
             raise ValueError(f'got unsupported backend {self.backend}')
