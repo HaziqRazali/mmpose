@@ -8,6 +8,28 @@ https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktai
 --output-root vis_results/ --save-predictions
 
 python demo/topdown_demo_with_mmdet.py \
+demo/mmdetection_cfg/rtmdet_nano_320-8xb32_coco-person.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.pth \
+projects/rtmpose/rtmpose/body_2d_keypoint/rtmpose-t_8xb256-420e_coco-256x192.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-tiny_simcc-aic-coco_pt-aic-coco_420e-256x192-cfc8f33d_20230126.pth \
+--input tests/data/coco/000000000785.jpg \
+--output-root vis_results/ --save-predictions
+
+python demo/topdown_demo_with_mmdet.py \
+demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
+configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-x-l_simcc-cocktail14_270e-256x192-20231122.pth \
+--input tests/data/coco/000000000785.jpg \
+--output-root vis_results/ --save-predictions
+
+
+
+
+
+
+
+python demo/topdown_demo_with_mmdet.py \
 demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py \
 https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth \
 configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb1024-270e_cocktail14-256x192.py \

@@ -31,8 +31,8 @@ CUDA_VISIBLE_DEVICES=0 python demo/synthium_demo.py \
 python demo/topdown_demo_with_mmdet.py \
 demo/mmdetection_cfg/rtmdet_nano_320-8xb32_coco-person.py \
 https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.pth \
-configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-m_8xb1024-270e_cocktail14-256x192.py \
-https://download.openmmlab.com/mmpose/v1/projects/rtmw/rtmw-dw-l-m_simcc-cocktail14_270e-256x192-20231122.pth \
+projects/rtmpose/rtmpose/body_2d_keypoint/rtmpose-t_8xb256-420e_coco-256x192.py \
+https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-tiny_simcc-aic-coco_pt-aic-coco_420e-256x192-cfc8f33d_20230126.pth \
 --input "webcam" --device "cpu" --show
 
 # large
