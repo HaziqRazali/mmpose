@@ -13,12 +13,16 @@ set -euo pipefail
 #
 # NOTE:
 # - Keeps --save-predictions.
-# - Does NOT skip existing outputs.
+# - By default, SKIPS videos if the output JSON already exists (resume-friendly).
+# - Set FORCE=1 to re-run inference even if outputs already exist.
+# - In TEST_MODE=1, it will still PRINT whether it would SKIP/RUN (and why).
 # - Whether an output mp4 is produced depends on your demo script + flags.
 #
 # Usage:
-#   TEST_MODE=1 ./run_mmpose_small_mocap_dataset.sh self
+#   TEST_MODE=1 FORCE=1 ./run_mmpose_small_mocap_dataset.sh self
+#   TEST_MODE=1 FORCE=0 ./run_mmpose_small_mocap_dataset.sh self
 #   SINGLE_VIDEO=1 ./run_mmpose_small_mocap_dataset.sh self
+#   FORCE=1 ./run_mmpose_small_mocap_dataset.sh self
 #   ./run_mmpose_small_mocap_dataset.sh self | tee mocap_self.txt
 #
 # If you don’t pass an arg, it defaults to "kit".
@@ -40,6 +44,7 @@ MODEL_NAME="rtmw-dw-l-m_simcc-cocktail14_270e-256x192-20231122"
 
 TEST_MODE="${TEST_MODE:-0}"
 SINGLE_VIDEO="${SINGLE_VIDEO:-0}"
+FORCE="${FORCE:-0}"   # FORCE=1 -> do not skip even if JSON exists
 
 DET_CFG="demo/mmdetection_cfg/rtmdet_nano_320-8xb32_coco-person.py"
 DET_CKPT="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.pth"
@@ -65,7 +70,7 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   split="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")")"
 
   out_dir="${DATA_ROOT}/${split}/${subject}/mmpose/${MODEL_NAME}/${camera}"
-  out_json="${out_dir}/${action_name}.json"
+  out_json="${out_dir}/results_${action_name}.json"
   out_mp4="${out_dir}/${action_name}.mp4"
 
   echo "Processing dataset=${DATASET_NAME} split=${split} subject=${subject} camera=${camera} action=${action_name}"
@@ -73,9 +78,36 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   echo "  out_json:  ${out_json}"
   echo "  out_video: ${out_mp4}  (only if your demo script actually writes a video)"
 
+  # Always print decision status (even in TEST_MODE)
+  if [[ -f "${out_json}" ]]; then
+    if [[ "${FORCE}" == "1" ]]; then
+      echo "  [FORCE] JSON exists -> will re-run (FORCE=1)."
+    else
+      echo "  [SKIP]  JSON exists -> will skip (FORCE!=1)."
+    fi
+  else
+    echo "  [RUN]   JSON missing -> will run."
+  fi
+
+  # Skip logic:
+  # - Default: if JSON exists, assume this video is done and skip it.
+  # - FORCE=1: do NOT skip; always re-run.
+  if [[ "${FORCE}" != "1" && -f "${out_json}" ]]; then
+    echo
+    if [[ "${SINGLE_VIDEO}" == "1" ]]; then
+      echo "SINGLE_VIDEO=1 -> stopping after first encountered video (skipped)."
+      exit 0
+    fi
+    continue
+  fi
+
   if [[ "${TEST_MODE}" == "1" ]]; then
     echo "  TEST_MODE=1 -> not creating dirs, not running inference."
     echo
+    if [[ "${SINGLE_VIDEO}" == "1" ]]; then
+      echo "SINGLE_VIDEO=1 -> stopping after first encountered video (test mode)."
+      exit 0
+    fi
     continue
   fi
 
