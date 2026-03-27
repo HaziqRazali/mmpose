@@ -264,7 +264,7 @@ def main():
 
     if args.save_predictions:
         args.pred_save_path = (
-            f'{args.output_root}/results_'
+            f'{args.output_root}/'
             f'{os.path.splitext(os.path.basename(args.input))[0]}.json'
         )
 

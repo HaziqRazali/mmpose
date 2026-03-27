@@ -30,7 +30,8 @@ set -euo pipefail
 # ---------------- ARG: dataset name ----------------
 DATASET_NAME="${1:-kit}"
 #DATA_ROOT="/home/haziqmr/datasets/mocap/data/${DATASET_NAME}"
-DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
+#DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
+DATA_ROOT="/home/haziq/datasets/mocap/data/${DATASET_NAME}"
 
 # Optional sanity check (helps catch typos like "kti")
 if [[ ! -d "${DATA_ROOT}" ]]; then
@@ -70,7 +71,7 @@ for f in "${DATA_ROOT}"/{train,val}/*/videos/*/*.{avi,mp4}; do
   split="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")")"
 
   out_dir="${DATA_ROOT}/${split}/${subject}/mmpose/${MODEL_NAME}/${camera}"
-  out_json="${out_dir}/results_${action_name}.json"
+  out_json="${out_dir}/${action_name}.json"
   out_mp4="${out_dir}/${action_name}.mp4"
 
   echo "Processing dataset=${DATASET_NAME} split=${split} subject=${subject} camera=${camera} action=${action_name}"
