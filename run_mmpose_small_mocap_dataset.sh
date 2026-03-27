@@ -24,7 +24,7 @@ set -euo pipefail
 #   SINGLE_VIDEO=1 ./run_mmpose_small_mocap_dataset.sh self
 #   FORCE=1 ./run_mmpose_small_mocap_dataset.sh self
 #   PARALLEL_JOBS=10 ./run_mmpose_small_mocap_dataset.sh self
-#   PARALLEL_JOBS=10 FORCE=1 ./run_mmpose_small_mocap_dataset.sh self | tee mocap_self.txt
+#   PARALLEL_JOBS=10 TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./run_mmpose_small_mocap_dataset.sh synthetic_2026_03_27 | tee synthetic.txt
 #
 # Parallelism notes:
 #   - PARALLEL_JOBS controls how many inference processes run simultaneously.
@@ -36,9 +36,8 @@ set -euo pipefail
 
 # ---------------- ARG: dataset name ----------------
 DATASET_NAME="${1:-kit}"
-#DATA_ROOT="/home/haziqmr/datasets/mocap/data/${DATASET_NAME}"
-#DATA_ROOT="/media/haziq/Haziq/mocap/data/${DATASET_NAME}"
-DATA_ROOT="/home/haziq/datasets/mocap/data/${DATASET_NAME}"
+DATA_ROOT_BASE="${DATA_ROOT_BASE:-/home/haziq/datasets/mocap/data}"
+DATA_ROOT="${DATA_ROOT:-${DATA_ROOT_BASE}/${DATASET_NAME}}"
 
 # Optional sanity check (helps catch typos like "kti")
 if [[ ! -d "${DATA_ROOT}" ]]; then
