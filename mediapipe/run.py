@@ -207,7 +207,7 @@ def run_inference(input_path: str, out_video_path: str | None = None) -> dict:
             if writer is not None:
                 vis = frame.copy()
                 for inst in instances:
-                    _draw_pose(vis, inst["keypoints"], inst["keypoint_scores"])
+                    _draw_pose(vis, inst["keypoints"], inst["keypoint_scores"], score_thr=0.5)
                 writer.write(vis)
 
             instance_info.append({"frame_id": frame_id, "instances": instances})

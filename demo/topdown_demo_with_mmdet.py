@@ -67,6 +67,15 @@ def pick_center_person_bbox(img, bboxes):
     return bboxes[idx:idx + 1]
 
 
+def pick_largest_person_bbox(bboxes):
+    """Keep only the bbox with the largest area."""
+    if bboxes is None or len(bboxes) == 0:
+        return bboxes
+    areas = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
+    idx = int(np.argmax(areas))
+    return bboxes[idx:idx + 1]
+
+
 def process_one_image(args,
                       img,
                       detector,
@@ -94,11 +103,18 @@ def process_one_image(args,
     if args.pick_center_person and bboxes is not None and len(bboxes) > 1:
         bboxes = pick_center_person_bbox(img, bboxes)
         last_bboxes = bboxes
+    elif args.pick_largest_person and bboxes is not None and len(bboxes) > 1:
+        bboxes = pick_largest_person_bbox(bboxes)
+        last_bboxes = bboxes
 
-    # Hard error if no detections (your requirement)
-    assert bboxes is not None and len(bboxes) > 0, (
-        f"[ERROR] No person detected on frame {frame_idx}. "
-        f"Increase --bbox-thr? Check --det-cat-id? Bad detector checkpoint?")
+    # Skip frame gracefully if no detections
+    if bboxes is None or len(bboxes) == 0:
+        import logging as _logging
+        _logging.warning(
+            f"[SKIP] No person detected on frame {frame_idx} — "
+            f"appending empty instances and continuing."
+        )
+        return None, None
 
     # Predict keypoints
     pose_results = inference_topdown(pose_estimator, img, bboxes)
@@ -227,6 +243,13 @@ def main():
         default=False,
         help='If set, keep only the detected person whose bbox center is closest '
         'to the image center. Requires --det-interval 1.')
+    parser.add_argument(
+        '--pick-largest-person',
+        action='store_true',
+        default=False,
+        help='If set, keep only the detected person with the largest bounding box '
+        'area. Useful when the subject is always the biggest person in frame. '
+        'Requires --det-interval 1.')
 
     assert has_mmdet, 'Please install mmdet to run the demo.'
     args = parser.parse_args()
@@ -239,6 +262,12 @@ def main():
     if args.pick_center_person:
         assert args.det_interval == 1, (
             '--pick-center-person requires --det-interval 1 (no bbox caching).')
+    if args.pick_largest_person:
+        assert args.det_interval == 1, (
+            '--pick-largest-person requires --det-interval 1 (no bbox caching).')
+    if args.pick_center_person and args.pick_largest_person:
+        raise ValueError(
+            '--pick-center-person and --pick-largest-person are mutually exclusive.')
 
     if args.save_video:
         assert args.output_root != '', '--save-video requires --output-root'
@@ -354,12 +383,22 @@ def main():
                 pred_instances_list.append(
                     dict(
                         frame_id=frame_idx,
-                        instances=split_instances(pred_instances)))
+                        instances=[] if pred_instances is None else split_instances(pred_instances)))
 
             # Save video (YES even if --show is false)
             if args.save_video:
                 assert output_file is not None and args.output_root != ''
                 assert visualizer is not None, 'Internal error: visualizer required for --save-video.'
+                # No detection: write the raw frame so the video stays temporally aligned
+                if pred_instances is None:
+                    frame_vis_bgr = frame
+                    if video_writer is None:
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        video_writer = cv2.VideoWriter(
+                            output_file, fourcc, 25,
+                            (frame_vis_bgr.shape[1], frame_vis_bgr.shape[0]))
+                    video_writer.write(frame_vis_bgr)
+                    continue
                 frame_vis = visualizer.get_image()
 
                 if video_writer is None:
@@ -381,8 +420,8 @@ def main():
 
             # Optional end-to-end FPS print (kept, since it's useful for your runs)
             elapsed = time.time() - t_start
-            fps = frame_idx / max(elapsed, 1e-9)
-            print(f"Total FPS (capture + inference): {fps:.2f}")
+            #fps = frame_idx / max(elapsed, 1e-9)
+            #print(f"Total FPS (capture + inference): {fps:.2f}")
 
         if video_writer:
             video_writer.release()

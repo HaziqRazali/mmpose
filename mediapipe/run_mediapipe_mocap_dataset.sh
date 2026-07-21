@@ -12,7 +12,7 @@ set -euo pipefail
 #   <DATA_ROOT>/<split>/<subject>/mediapipe/<camera>/<action>.json
 #
 # Usage (same patterns as the MMPose runner):
-#   TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./mediapipe/run_mediapipe_mocap_dataset.sh fit3d
+#   TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./run_mediapipe_mocap_dataset.sh fit3d
 #   PARALLEL_JOBS=10 TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./mediapipe/run_mediapipe_mocap_dataset.sh fit3d | tee mediapipe.txt
 #   SINGLE_VIDEO=1 DATA_ROOT_BASE=/data/haziq/mocap/data ./mediapipe/run_mediapipe_mocap_dataset.sh fit3d
 #   FORCE=1 DATA_ROOT_BASE=/data/haziq/mocap/data ./mediapipe/run_mediapipe_mocap_dataset.sh fit3d

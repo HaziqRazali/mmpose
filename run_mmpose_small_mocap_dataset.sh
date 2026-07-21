@@ -17,14 +17,14 @@ set -euo pipefail
 # - Set FORCE=1 to re-run inference even if outputs already exist.
 # - In TEST_MODE=1, it will still PRINT whether it would SKIP/RUN (and why).
 # - Whether an output mp4 is produced depends on your demo script + flags.
-#
+# 
 # Usage:
-#   TEST_MODE=1 FORCE=1 ./run_mmpose_small_mocap_dataset.sh self
+#   DATA_ROOT_BASE=/data/haziq/mocap/data TEST_MODE=1 FORCE=1 ./run_mmpose_small_mocap_dataset.sh synthetic_fit3d_all
 #   TEST_MODE=1 FORCE=0 ./run_mmpose_small_mocap_dataset.sh self
 #   SINGLE_VIDEO=1 ./run_mmpose_small_mocap_dataset.sh self
 #   FORCE=1 ./run_mmpose_small_mocap_dataset.sh self
 #   PARALLEL_JOBS=10 ./run_mmpose_small_mocap_dataset.sh self
-#   PARALLEL_JOBS=10 TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./run_mmpose_small_mocap_dataset.sh synthetic_2026_03_27 | tee synthetic.txt
+#   PARALLEL_JOBS=10 TEST_MODE=1 FORCE=0 DATA_ROOT_BASE=/data/haziq/mocap/data ./run_mmpose_small_mocap_dataset.sh fit3d | tee synthetic.txt
 #
 # Parallelism notes:
 #   - PARALLEL_JOBS controls how many inference processes run simultaneously.
